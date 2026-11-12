@@ -355,6 +355,26 @@ describe('optimized geo.js', function () {
         expect(limited.maxInflight()).to.be.at.most(3);
     });
 
+    it('reuses a shared check for the same node under a different name', async function () {
+        const { default: checkCache, checkKey } = require('@/utils/check-result-cache');
+        checkCache.revokeAll();
+        const env = createEnv({ settings: { scriptCacheTtl: 3600 } });
+        env.cache.sharedCheckGet = (identity) => checkCache.get(checkKey(identity));
+        env.cache.sharedCheckSet = (identity, value) =>
+            checkCache.set(checkKey(identity), value);
+        env.cache.sharedCheckClaim = (identity) => checkCache.claim(identity);
+        const input = [
+            { name: 'one', type: 'ss', server: 'a.example', port: 1, password: 'p' },
+            { name: 'two', type: 'ss', server: 'a.example', port: 1, password: 'p' },
+        ];
+        const output = await runOptimized(clone(input), { cache: true, geo: true }, env);
+        expect(env.httpCalls).to.have.length(1);
+        expect(output[0].name).to.include('one');
+        expect(output[1].name).to.include('two');
+        expect(output[0]._geo).to.deep.equal(output[1]._geo);
+        checkCache.revokeAll();
+    });
+
     it('writes the whole batch once when the cache has no flush helper', async function () {
         const env = createEnv({ omitFlush: true, deferPersist: true });
         await runOptimized(clone(nodes()), { cache: true, geo: true }, env);

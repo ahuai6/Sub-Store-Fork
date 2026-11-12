@@ -45,6 +45,16 @@ need('backend/src/restful/preview.js', "'preview-sub'");
 need('backend/src/restful/download.js', "'download-sub'");
 need('backend/src/restful/node-info.js', "'node-info'");
 need('backend/src/utils/script-resource-cache.js', 'flush()');
+need('backend/src/utils/output-cache.js', 'resourceCacheTtl');
+need('backend/src/utils/check-result-cache.js', 'scriptCacheTtl');
+need('backend/src/utils/script-resource-cache.js', 'sharedCheck');
+need('backend/src/restful/miscs.js', 'outputCache.revokeAll');
+need('backend/src/restful/miscs.js', 'checkResultCache.revokeAll');
+need('scripts/check/geo.js', 'sharedCheckGet');
+need('.github/scripts/render_surge_beta_module.py', 'prefetch_cron');
+need('backend/src/utils/prefetch-cron.js', 'prefetch_cron is empty');
+need('backend/src/products/cron-sync-artifacts.js', 'prefetchDecision');
+need('backend/scripts/bench.js', 'outputCacheHit5000');
 need('backend/src/vendor/express.js', 'scriptResourceCache.flush');
 need('scripts/check/geo.js', 'time_budget');
 need(

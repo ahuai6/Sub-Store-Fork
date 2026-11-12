@@ -24,6 +24,11 @@
  * key. It is not a reason to keep a result after that TTL. The existing
  * clear-cache action (scriptResourceCache.revokeAll) deletes these entries.
  *
+ * When scriptResourceCache.sharedCheckGet is present, a node with the same
+ * connection identity (name ignored) and the same api/regex/internal/method
+ * reuses that shared result inside scriptCacheTtl. Output for this proxy
+ * still uses this proxy's name and format.
+ *
  * 节点信息(适配 Surge/Loon 版 也可在任意平台上使用 HTTP API)
  *
  * 参数
@@ -143,8 +148,22 @@ async function operator(proxies = [], targetPlatform, context) {
     flushPending()
   }
 
+  function sharedIdentity(proxy) {
+    return {
+      node: proxy,
+      script: 'sub-store-fork/scripts/check/geo.js',
+      args: {
+        url,
+        regex: regex || '',
+        internal: internal ? 1 : 0,
+        method,
+      },
+    }
+  }
+
   async function check(proxy) {
     const id = cacheEnabled ? cacheId(proxy) : undefined
+    let finishShared = null
     try {
       let node
       if (isEgern && !surge_http_api_enabled) {
@@ -159,7 +178,32 @@ async function operator(proxies = [], targetPlatform, context) {
         })
       }
       if (node) {
-        const cached = cache.get(id)
+        let cached = cache.get(id)
+        if (cacheEnabled && !cached && typeof cache.sharedCheckGet === 'function') {
+          try {
+            cached = cache.sharedCheckGet(sharedIdentity(proxy))
+          } catch (e) {
+            cached = null
+          }
+        }
+        const cacheUsable = cached && (cached.api || !disableFailedCache)
+        if (
+          cacheEnabled &&
+          !cacheUsable &&
+          typeof cache.sharedCheckClaim === 'function'
+        ) {
+          const claim = cache.sharedCheckClaim(sharedIdentity(proxy))
+          if (claim.cached && (claim.cached.api || !disableFailedCache)) {
+            cached = claim.cached
+          } else if (claim.pending) {
+            try {
+              const shared = await claim.pending
+              if (shared && (shared.api || !disableFailedCache)) cached = shared
+            } catch (e) {}
+          } else if (typeof claim.finish === 'function') {
+            finishShared = claim.finish
+          }
+        }
         if (cacheEnabled && cached) {
           if (cached.api) {
             $.info(`[${proxy.name}] 使用成功缓存`)
@@ -208,11 +252,13 @@ async function operator(proxies = [], targetPlatform, context) {
           proxy._geo = api
           if (cacheEnabled) {
             $.info(`[${proxy.name}] 设置成功缓存`)
-            remember(id, { api })
+            remember(id, { api }, proxy, finishShared)
+            finishShared = null
           }
         } else if (cacheEnabled) {
           $.info(`[${proxy.name}] 设置失败缓存`)
-          remember(id, {})
+          remember(id, {}, proxy, finishShared)
+          finishShared = null
         }
       } else {
         proxy._incompatible = true
@@ -221,7 +267,13 @@ async function operator(proxies = [], targetPlatform, context) {
       $.error(`[${proxy.name}] ${e.message ?? e}`)
       if (cacheEnabled) {
         $.info(`[${proxy.name}] 设置失败缓存`)
-        remember(id, {})
+        remember(id, {}, proxy, finishShared)
+        finishShared = null
+      } else if (finishShared) {
+        try {
+          finishShared(null, e)
+        } catch (err) {}
+        finishShared = null
       }
     }
   }
@@ -238,7 +290,17 @@ async function operator(proxies = [], targetPlatform, context) {
     return `geo:${digest}`
   }
 
-  function remember(id, data) {
+  function remember(id, data, proxy, finishShared) {
+    if (cacheEnabled && proxy && typeof cache.sharedCheckSet === 'function') {
+      try {
+        cache.sharedCheckSet(sharedIdentity(proxy), data)
+      } catch (e) {}
+    }
+    if (typeof finishShared === 'function') {
+      try {
+        finishShared(data)
+      } catch (e) {}
+    }
     if (!cacheEnabled || !id) return
     pending.push([id, data])
     if (pending.length >= CACHE_BATCH) flushPending()
