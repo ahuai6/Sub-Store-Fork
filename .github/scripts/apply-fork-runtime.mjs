@@ -35,6 +35,7 @@ function need(rel, marker) {
 }
 
 need('backend/package.json', '"bench"');
+need('backend/src/utils/geo.js', 'fork: getFlag matchers are compiled once');
 need('backend/scripts/bench.js', 'getFlag5000');
 need(
     'backend/src/test/proxy-producers/golden-snapshot.spec.js',
