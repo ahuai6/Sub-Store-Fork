@@ -117,6 +117,9 @@ else
   branch=main
 fi
 
+# scripts/check/geo.js is an optimized copy of xream/scripts geo.js. That
+# repository's LICENSE is GPL-3.0, but its README forbids republication, so
+# the file is not copied to the public artifact repo.
 # Copy LICENSE from the source checkout unchanged.
 cp "${SOURCE_ROOT}/LICENSE" "${workdir}/repo/LICENSE"
 cp "${DIST_DIR}/Surge-Beta.sgmodule" "${workdir}/repo/Surge-Beta.sgmodule"
