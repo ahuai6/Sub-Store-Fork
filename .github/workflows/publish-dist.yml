@@ -2,8 +2,8 @@ name: publish-dist
 
 # Build the same backend bundles upstream attaches to a GitHub Release, then
 # publish them where Surge can fetch them. config/Surge-Beta.sgmodule in this
-# repo stays identical to upstream; the copy we publish only changes the
-# artifact URL prefix.
+# repo stays identical to upstream. The copy we publish changes the artifact
+# URL prefix and appends the self-hosted frontend origin to the cors argument.
 #
 # Upstream's .github/workflows/main.yml is left untouched. It runs on `master`
 # and uploads to this repo's Releases, which are not public while the source
@@ -51,6 +51,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Check fork frontend customizations
+        run: node .github/scripts/apply-fork-frontend.mjs --check
 
       - name: Set up Node.js
         uses: actions/setup-node@v6

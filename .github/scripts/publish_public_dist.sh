@@ -147,7 +147,13 @@ ${RELEASE_MODULE_URL}
 \`\`\`
 
 Script paths inside the module use \`releases/latest/download\` on **this** repo.
-Compared with [upstream's beta module](https://raw.githubusercontent.com/sub-store-org/Sub-Store/master/config/Surge-Beta.sgmodule), only those artifact URLs differ.
+Compared with [upstream's beta module](https://raw.githubusercontent.com/sub-store-org/Sub-Store/master/config/Surge-Beta.sgmodule), those artifact URLs differ and the default \`cors\` list also includes \`https://ahuai6.github.io\`.
+
+## Frontend
+
+https://ahuai6.github.io/Sub-Store-Fork-Dist/
+
+The \`/\` redirect targets that site. It is the upstream front end (GPL-3.0), built for this subpath. License and corresponding source are on the \`gh-pages\` branch.
 
 ## License
 
