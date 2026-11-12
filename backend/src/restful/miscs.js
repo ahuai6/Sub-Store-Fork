@@ -101,10 +101,11 @@ export default function register($app) {
     if (ENV().isNode) {
         $app.get('/', getEnv);
     } else {
-        // Redirect sub.store to vercel webpage
+        // Redirect sub.store to the self-hosted GitHub Pages frontend.
+        // Reapplied by .github/scripts/apply-fork-frontend.mjs after upstream merges.
         $app.get('/', async (req, res) => {
             // 302 redirect
-            res.set('location', 'https://sub-store.vercel.app/')
+            res.set('location', 'https://ahuai6.github.io/Sub-Store-Fork-Dist/')
                 .status(302)
                 .end();
         });

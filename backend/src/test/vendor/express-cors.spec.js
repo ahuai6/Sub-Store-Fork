@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import { afterEach, describe, it } from 'mocha';
 
+import { NON_NODE_CORS_DEFAULT } from '@/utils/cors';
 import express from '@/vendor/express';
 
 const ENV_KEY = 'SUB_STORE_CORS_ALLOWED_ORIGINS';
@@ -39,7 +40,7 @@ describe('express CORS allowlist adapter', function () {
                 expect(
                     logs.filter((log) => log.startsWith('[CORS]')),
                 ).to.deep.equal([
-                    '[CORS] SUB_STORE_CORS_ALLOWED_ORIGINS is not set; using default allowed origins: https://sub-store.vercel.app,http://substore.stash,https://substore.stash',
+                    `[CORS] SUB_STORE_CORS_ALLOWED_ORIGINS is not set; using default allowed origins: ${NON_NODE_CORS_DEFAULT}`,
                 ]);
             },
         );
@@ -86,7 +87,7 @@ describe('express CORS allowlist adapter', function () {
                 expect(
                     logs.filter((log) => log.startsWith('[CORS]')),
                 ).to.deep.equal([
-                    '[CORS] allowed origins: https://sub-store.vercel.app,http://substore.stash,https://substore.stash,http://localhost:<any-port>,http://127.0.0.1:<any-port> (default:node)',
+                    `[CORS] allowed origins: ${NON_NODE_CORS_DEFAULT},http://localhost:<any-port>,http://127.0.0.1:<any-port> (default:node)`,
                 ]);
             },
             'custom',
