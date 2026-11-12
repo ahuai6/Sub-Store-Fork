@@ -38,6 +38,135 @@ def normalize_base(base: str) -> str:
     return value
 
 
+FORK_GUARD = "forkRequestGuard.ts"
+FORK_META = (
+    '<meta name="sub-store-fork" '
+    'content="api-cap-2 skip-restored-preview" />'
+)
+CONCURRENCY_FN = """export const getFrontendRequestConcurrency = () => {
+  const storedConcurrency = localStorage.getItem('concurrency')?.trim();
+  const concurrency = storedConcurrency ? Number(storedConcurrency) : DEFAULT_FRONTEND_REQUEST_CONCURRENCY;
+
+  return Number.isInteger(concurrency) && concurrency >= 1
+    ? concurrency
+    : DEFAULT_FRONTEND_REQUEST_CONCURRENCY;
+};"""
+CONCURRENCY_FN_NEXT = """export const FORK_MAX_FRONTEND_REQUEST_CONCURRENCY = 2;
+
+export const getFrontendRequestConcurrency = () => {
+  const storedConcurrency = localStorage.getItem('concurrency')?.trim();
+  const concurrency = storedConcurrency ? Number(storedConcurrency) : DEFAULT_FRONTEND_REQUEST_CONCURRENCY;
+
+  const resolved = Number.isInteger(concurrency) && concurrency >= 1
+    ? concurrency
+    : DEFAULT_FRONTEND_REQUEST_CONCURRENCY;
+  // Leave one of Surge's 3 webview script sessions free.
+  return Math.min(resolved, FORK_MAX_FRONTEND_REQUEST_CONCURRENCY);
+};"""
+PREVIEW_RETURN = """      return request({
+        url: `/api/preview/${type}`,
+        method: 'post',
+        data,
+      });"""
+PREVIEW_RETURN_NEXT = """      if (blockRestoredHeavyPreview()) {
+        return Promise.reject(restoredPreviewError());
+      }
+      return request({
+        url: `/api/preview/${type}`,
+        method: 'post',
+        data,
+      });"""
+
+
+def _require(text: str, old: str, label: str) -> None:
+    if old not in text:
+        raise SystemExit(f"{label} is missing anchor:\n{old}")
+
+
+def _replace_once(text: str, old: str, new: str, label: str) -> str:
+    if new in text:
+        return text
+    _require(text, old, label)
+    return text.replace(old, new, 1)
+
+
+def patch_surge_session_guard(frontend: Path) -> None:
+    """Cap API concurrency and skip heavy previews after refresh/restore.
+
+    Anchors are the upstream strings. A vanished anchor fails the build
+    instead of shipping a frontend that can fill all 3 Surge script slots.
+    """
+    template = (
+        Path(__file__).resolve().parent / "fork-frontend" / FORK_GUARD
+    )
+    if not template.is_file():
+        raise SystemExit(f"missing frontend guard template {template}")
+    target = frontend / "src" / "utils" / FORK_GUARD
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(template.read_text())
+
+    api_path = frontend / "src" / "api" / "index.ts"
+    api = api_path.read_text()
+    api = _replace_once(
+        api,
+        "import { getApiRequestTimeout } from '@/utils/requestTimeout';",
+        "import { getApiRequestTimeout } from '@/utils/requestTimeout';\n"
+        "import { installForkApiQueue } from '@/utils/forkRequestGuard';",
+        str(api_path),
+    )
+    api = _replace_once(
+        api,
+        "const service = axios.create({\n"
+        "  baseURL: getHostAPIUrl(),\n"
+        "  timeout: getApiRequestTimeout(),\n"
+        "  headers: { 'Content-Type': 'application/json' },\n"
+        "});",
+        "const service = axios.create({\n"
+        "  baseURL: getHostAPIUrl(),\n"
+        "  timeout: getApiRequestTimeout(),\n"
+        "  headers: { 'Content-Type': 'application/json' },\n"
+        "});\n"
+        "installForkApiQueue(service);",
+        str(api_path),
+    )
+    api_path.write_text(api)
+
+    subs_path = frontend / "src" / "api" / "subs" / "index.ts"
+    subs = subs_path.read_text()
+    subs = _replace_once(
+        subs,
+        "import request from '@/api';\nimport { AxiosPromise } from 'axios';",
+        "import request from '@/api';\n"
+        "import { AxiosPromise } from 'axios';\n"
+        "import { blockRestoredHeavyPreview, restoredPreviewError } "
+        "from '@/utils/forkRequestGuard';",
+        str(subs_path),
+    )
+    subs = _replace_once(subs, PREVIEW_RETURN, PREVIEW_RETURN_NEXT, str(subs_path))
+    subs_path.write_text(subs)
+
+    queue_path = frontend / "src" / "utils" / "requestConcurrency.ts"
+    queue = queue_path.read_text()
+    queue = _replace_once(
+        queue, CONCURRENCY_FN, CONCURRENCY_FN_NEXT, str(queue_path)
+    )
+    queue_path.write_text(queue)
+
+    index_path = frontend / "index.html"
+    html = index_path.read_text()
+    version_meta = (
+        '<meta name="version" content="__SUB_STORE_FRONT_END_VERSION__">'
+    )
+    html = _replace_once(
+        html,
+        version_meta,
+        version_meta + "\n  " + FORK_META,
+        str(index_path),
+    )
+    index_path.write_text(html)
+    print(f"patched Surge session guard in {frontend}", file=sys.stderr)
+
+
 def patch_checkout(frontend: Path, base: str, api: str) -> None:
     base = normalize_base(base)
     env_path = frontend / ".env"
@@ -117,6 +246,7 @@ def patch_checkout(frontend: Path, base: str, api: str) -> None:
             raise SystemExit(f"{manifest_path} has no {key}")
         manifest[key] = base
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    patch_surge_session_guard(frontend)
     print(f"patched {frontend} base={base} api={api}", file=sys.stderr)
 
 
@@ -187,6 +317,14 @@ def check_dist(dist: Path, base: str, api: str) -> None:
         raise SystemExit(f"built JS does not contain the base path {base}")
     if api not in bundled:
         raise SystemExit(f"built JS does not contain {api}")
+    if 'name="sub-store-fork"' not in index:
+        raise SystemExit("index.html is missing the sub-store-fork marker")
+    for marker in (
+        "sub-store-fork-api-cap:2",
+        "sub-store-fork-skip-restored-preview",
+    ):
+        if marker not in bundled:
+            raise SystemExit(f"built JS is missing {marker}")
     print(
         f"ok: {index_path} assets, PWA scope, and {api} are under {base}",
         file=sys.stderr,
@@ -232,7 +370,7 @@ This branch is the Sub-Store front end, built so GitHub Pages can serve it at <{
 
 The front end is GPL-3.0. Backend artifacts on the `main` branch of this repository are a separate Sub-Store build and stay under AGPL-3.0. This branch does not replace that license.
 
-The corresponding source of this build is the commit above. Application source was not modified. The build configuration applied on top of that commit is:
+The corresponding source of this build is the commit above. The Pages build also applies a small behavior patch on top of that commit (API calls are queued to 2, and a reloaded or restored page does not start a heavy preview until the next user action). The build configuration applied on top of that commit is:
 
 1. Vite `base` / `VITE_PUBLIC_PATH` = `{meta['base']}`
 2. `VITE_API_URL` = `{meta['api']}` (upstream `.env.production` already uses this URL)
@@ -242,6 +380,8 @@ The corresponding source of this build is the commit above. Application source w
 6. Root-absolute `href` values in `index.html`, and `id` / `start_url` / `scope` in `public/manifests.json`, rewritten to `{meta['base']}`
 7. `404.html` is a copy of `index.html`, so GitHub Pages can boot the single-page app on client-side routes
 8. `.nojekyll` is present so Pages publishes every file
+9. Axios requests are queued to 2 (`sub-store-fork-api-cap:2`) so a Surge webview page leaves one of the 3 script sessions free
+10. `POST /api/preview/*` is skipped after a reload, back/forward restore, or bfcache `pageshow` until the next pointer, touch, or key action (`sub-store-fork-skip-restored-preview`)
 
 Source commit: {source}
 """
