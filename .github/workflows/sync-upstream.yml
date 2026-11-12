@@ -36,10 +36,28 @@ jobs:
       - name: Fast-forward upstream branch
         run: |
           set -euo pipefail
-          if ! git push --ff-only origin upstream/master:refs/heads/upstream; then
-            echo "::error::Refusing to force-update refs/heads/upstream. It must stay a fast-forward of sub-store-org/Sub-Store master."
+          # git push has no --ff-only. Confirm the remote tip is an ancestor, then
+          # push without --force. A rejected non-fast-forward still fails the step.
+          target_sha=$(git rev-parse upstream/master)
+          if git ls-remote --exit-code --heads origin upstream >/dev/null; then
+            # Fetch into a throwaway ref so a stale local tip cannot reject the read.
+            git update-ref -d refs/tmp/sync-upstream-tip 2>/dev/null || true
+            git fetch --no-tags origin refs/heads/upstream:refs/tmp/sync-upstream-tip
+            remote_sha=$(git rev-parse refs/tmp/sync-upstream-tip)
+          else
+            remote_sha=""
+          fi
+          if [ -z "$remote_sha" ]; then
+            echo "Creating refs/heads/upstream at ${target_sha}"
+          elif [ "$remote_sha" = "$target_sha" ]; then
+            echo "refs/heads/upstream is already ${target_sha}"
+          elif git merge-base --is-ancestor "$remote_sha" "$target_sha"; then
+            echo "Fast-forward ${remote_sha} -> ${target_sha}"
+          else
+            echo "::error::Refusing to force-update refs/heads/upstream (${remote_sha} is not an ancestor of ${target_sha})."
             exit 1
           fi
+          git push origin "${target_sha}:refs/heads/upstream"
 
       - name: Mirror new upstream tags
         run: |
