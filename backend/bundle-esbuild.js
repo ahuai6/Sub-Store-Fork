@@ -6,6 +6,16 @@ const path = require('path');
 const { build } = require('esbuild');
 
 const objectHasOwnPolyfill = require.resolve('core-js/actual/object/has-own');
+
+function precompilePeggy() {
+    // The runtime-manifest fixture symlinks src and copies this file, but not
+    // scripts/. Parsers in that src tree are already generated.
+    try {
+        require('./scripts/precompile-peggy').precompilePeggy();
+    } catch (error) {
+        if (!error || error.code !== 'MODULE_NOT_FOUND') throw error;
+    }
+}
 const builtinModuleNames = new Set(
     builtinModules.map((name) => name.replace(/^node:/, '')),
 );
@@ -99,6 +109,7 @@ const nodeBuiltinExternalPlugin = {
 };
 
 !(async () => {
+    precompilePeggy();
     let version;
     try {
         version = JSON.parse(

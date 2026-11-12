@@ -1,10 +1,5 @@
-import {
-    deleteByName,
-    findByName,
-    insertByPosition,
-    updateByName,
-} from '@/utils/database';
-import { getCreateItemPosition } from '@/utils/create-item-position';
+import { findByName, updateByName } from '@/utils/database';
+import { createFileItem, deleteFileItem } from '@/restful/file-items';
 import { getFlowHeaders, normalizeFlowHeader } from '@/utils/flow';
 import { FILES_KEY, ARTIFACTS_KEY } from '@/constants';
 import { failed, success } from '@/restful/response';
@@ -532,42 +527,6 @@ function replaceFile(req, res) {
     } catch (error) {
         failed(res, error);
     }
-}
-
-function createFileItem(rawFile) {
-    const file = normalizeFileConfig({
-        ...rawFile,
-    });
-    normalizeAgePublicKeyConfig(file);
-    normalizeEditorLanguageConfig(file);
-    file.name = `${file.name ?? Date.now()}`;
-    $.info(`正在创建文件：${file.name}`);
-    const allFiles = $.read(FILES_KEY);
-    if (findByName(allFiles, file.name)) {
-        throw new RequestInvalidError(
-            'DUPLICATE_KEY',
-            rawFile.name
-                ? `已存在 name 为 ${file.name} 的文件`
-                : `无法同时创建相同的文件 可稍后重试`,
-        );
-    }
-    insertByPosition(allFiles, file, getCreateItemPosition());
-    $.write(allFiles, FILES_KEY);
-    return file;
-}
-
-function deleteFileItem(name) {
-    const allFiles = $.read(FILES_KEY) || [];
-    const file = findByName(allFiles, name);
-    if (!file) {
-        throw new ResourceNotFoundError(
-            'RESOURCE_NOT_FOUND',
-            `File ${name} does not exist!`,
-        );
-    }
-    deleteByName(allFiles, name);
-    $.write(allFiles, FILES_KEY);
-    return file;
 }
 
 function shouldArchiveDeletion(mode) {

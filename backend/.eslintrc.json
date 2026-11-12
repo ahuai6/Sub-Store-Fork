@@ -1,5 +1,9 @@
 {
-    "ignorePatterns": ["*.min.js", "src/vendor/*.js"],
+    "ignorePatterns": [
+        "*.min.js",
+        "src/vendor/*.js",
+        "src/core/proxy-utils/parsers/peggy/generated/**"
+    ],
     "env": {
         "browser": true,
         "es2021": true,

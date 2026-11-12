@@ -6,16 +6,19 @@ use GitHub Releases on sub-store-org/Sub-Store. This source repo is private,
 so those URLs are rewritten to the same path on a public artifact repo.
 
 The published copy also appends the self-hosted frontend origin to the
-default `cors` argument, and an opt-in prefetch cron that is off while
-`prefetch_cron` is empty. config/Surge-Beta.sgmodule in this repo stays
-identical to upstream. Restoring the artifact prefix, the upstream CORS
-list, and removing the prefetch block must reproduce that file byte for byte.
+default `cors` argument, an opt-in prefetch cron that is off while
+`prefetch_cron` is empty, and a wider core script pattern so file routes run
+in sub-store-1. config/Surge-Beta.sgmodule in this repo stays identical to
+upstream. Restoring the artifact prefix, the upstream CORS list, the upstream
+core pattern, and removing the prefetch block must reproduce that file byte
+for byte.
 """
 
 from __future__ import annotations
 
 import argparse
 import difflib
+import re
 import sys
 from pathlib import Path
 
@@ -41,6 +44,13 @@ PREFETCH_DESC = (
     r"prefetch_platform 默认 Surge. 过期后仍会完整重算, 哈希只在 TTL 内作为缓存键."
 )
 PREFETCH_MARK = "sub-store-fork-prefetch"
+UPSTREAM_CORE_PATTERN = (
+    r"pattern=^https?:\/\/sub\.store\/((download)|api\/(preview|sync|(utils\/node-info)))"
+)
+FORK_CORE_PATTERN = (
+    r"pattern=^https?:\/\/sub\.store\/((download)|share\/file(?:\/|\?|#|$)|"
+    r"api\/((?:files|wholeFiles|wholeFile|file)(?:\/|\?|#|$)|preview|sync|(?:utils\/node-info)))"
+)
 
 
 def artifact_prefix(public_repo: str) -> str:
@@ -69,7 +79,7 @@ def render(source: bytes, public_repo: str) -> bytes:
         raise SystemExit(
             "rewritten module still references sub-store-org/Sub-Store"
         )
-    return add_prefetch(updated)
+    return add_prefetch(widen_core_pattern(updated))
 
 
 def _insert_on_prefixed_line(text: str, prefix: str, suffix: str) -> str:
@@ -113,6 +123,60 @@ def add_prefetch(updated: bytes) -> bytes:
         '&sub={{{prefetch_sub}}}&col={{{prefetch_col}}}"\n'
     )
     return text.encode("utf-8")
+
+
+def widen_core_pattern(updated: bytes) -> bytes:
+    """Send file URLs to sub-store-1, which is the first matching script."""
+    text = updated.decode("utf-8")
+    if FORK_CORE_PATTERN in text:
+        return updated
+    count = text.count(UPSTREAM_CORE_PATTERN)
+    if count != 1:
+        raise SystemExit(f"expected one upstream core pattern, found {count}")
+    return text.replace(UPSTREAM_CORE_PATTERN, FORK_CORE_PATTERN, 1).encode()
+
+
+def restore_core_pattern(text: str) -> str:
+    if FORK_CORE_PATTERN not in text:
+        raise SystemExit("fork core pattern missing")
+    return text.replace(FORK_CORE_PATTERN, UPSTREAM_CORE_PATTERN, 1)
+
+
+def assert_file_routes_on_core(module_text: str) -> None:
+    line = next(
+        (item for item in module_text.splitlines() if item.startswith("Sub-Store Core=")),
+        "",
+    )
+    match = re.search(r"pattern=([^,]+)", line)
+    if not match:
+        raise SystemExit("core script pattern missing")
+    pattern = re.compile(match.group(1))
+    must = [
+        "https://sub.store/download/a",
+        "https://sub.store/api/preview/sub",
+        "https://sub.store/api/sync/artifacts",
+        "https://sub.store/api/utils/node-info",
+        "https://sub.store/api/file/foo",
+        "https://sub.store/api/files",
+        "https://sub.store/api/files?x=1",
+        "https://sub.store/api/wholeFile/a",
+        "https://sub.store/api/wholeFiles",
+        "https://sub.store/share/file/a",
+        "https://sub.store/share/file/a?x=1",
+    ]
+    must_not = [
+        "https://sub.store/api/utils/env",
+        "https://sub.store/api/subs",
+        "https://sub.store/api/filesomething",
+        "https://sub.store/share/sub/a",
+        "https://sub.store/api/artifact/a",
+    ]
+    for url in must:
+        if pattern.search(url) is None:
+            raise SystemExit(f"core pattern missed {url}")
+    for url in must_not:
+        if pattern.search(url) is not None:
+            raise SystemExit(f"core pattern should not match {url}")
 
 
 def strip_prefetch(text: str) -> str:
@@ -180,8 +244,10 @@ def assert_prefetch_disabled_by_default(module_text: str) -> None:
 
 def assert_expected_diff(original: bytes, updated: bytes, public_repo: str) -> str:
     """Fail unless reversing the prefix and CORS origin restores the source."""
-    assert_prefetch_disabled_by_default(updated.decode("utf-8"))
-    comparable = strip_prefetch(updated.decode("utf-8")).encode("utf-8")
+    updated_text = updated.decode("utf-8")
+    assert_prefetch_disabled_by_default(updated_text)
+    assert_file_routes_on_core(updated_text)
+    comparable = restore_core_pattern(strip_prefetch(updated_text)).encode()
     old = UPSTREAM_PREFIX.encode()
     new = artifact_prefix(public_repo).encode()
     # Replace the longer CORS list first. It starts with the upstream list.
@@ -190,7 +256,7 @@ def assert_expected_diff(original: bytes, updated: bytes, public_repo: str) -> s
     )
     if restored != original:
         raise SystemExit(
-            "diff is not limited to the artifact URL prefix, the fork CORS origin, and the prefetch cron"
+            "diff is not limited to the artifact URL prefix, the fork CORS origin, the core file pattern, and the prefetch cron"
         )
 
     # The URL/CORS check ignores the prefetch block. strip_prefetch removes it.

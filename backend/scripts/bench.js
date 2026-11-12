@@ -18,6 +18,8 @@ const path = require('path');
 const vm = require('vm');
 const { performance } = require('perf_hooks');
 
+require('./precompile-peggy').precompilePeggy();
+
 const backendRoot = path.resolve(__dirname, '..');
 const baselinePath = path.join(backendRoot, 'bench', 'baseline.json');
 const writeBaseline = process.argv.includes('--write-baseline');
