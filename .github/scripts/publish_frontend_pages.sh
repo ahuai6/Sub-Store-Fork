@@ -73,9 +73,16 @@ TOKEN=${TOKEN#Bearer}
 TOKEN=${TOKEN#bearer}
 basic=$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')
 export GIT_TERMINAL_PROMPT=0
+# actions/checkout@v6 keeps the job token in an includeIf file as
+# http.https://github.com/.extraheader. That key is multi-valued, so adding
+# another -c extraheader sends both and GitHub returns 400 Duplicate header.
+# An empty value clears the inherited list. Keep this in sync with
+# publish_public_dist.sh. The result is exactly one Authorization header.
 git_auth() {
   git \
     -c credential.helper= \
+    -c http.extraheader= \
+    -c "http.https://github.com/.extraheader=" \
     -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic}" \
     "$@"
 }
@@ -83,12 +90,29 @@ git_auth() {
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
-remote_branch=$(git_auth ls-remote --heads "https://github.com/${REPO}.git" "$BRANCH" || true)
-echo "Cloning ${REPO}"
-if [[ -n "$remote_branch" ]]; then
-  git_auth clone --depth 1 --branch "$BRANCH" "https://github.com/${REPO}.git" "${workdir}/repo"
+remote="https://github.com/${REPO}.git"
+# Run outside the source checkout. Its includeIf credentials apply only when
+# gitdir matches that repo; ls-remote from inside it was what duplicated the
+# header. Exit 2 from ls-remote --exit-code means the branch is absent. Any
+# other failure must stop the job. Treating it as "no branch" creates a root
+# commit whose push is then rejected, or would need a force-push.
+creating_branch=0
+if remote_branch=$(git_auth -C "$workdir" ls-remote --exit-code --heads "$remote" "$BRANCH"); then
+  if [[ -z "$remote_branch" ]]; then
+    echo "::error::ls-remote succeeded but did not return ${BRANCH} on ${REPO}."
+    exit 1
+  fi
+  echo "Cloning ${REPO} branch ${BRANCH}"
+  git_auth -C "$workdir" clone --depth 1 --branch "$BRANCH" "$remote" "${workdir}/repo"
 else
-  git_auth clone --depth 1 "https://github.com/${REPO}.git" "${workdir}/repo"
+  probe_status=$?
+  if [[ "$probe_status" -ne 2 ]]; then
+    echo "::error::Could not list ${BRANCH} on ${REPO} (git ls-remote exit ${probe_status}). Refusing to create a new root commit."
+    exit 1
+  fi
+  creating_branch=1
+  echo "${BRANCH} does not exist on ${REPO}. Creating it."
+  git_auth -C "$workdir" clone --depth 1 "$remote" "${workdir}/repo"
   git -C "${workdir}/repo" checkout --orphan "$BRANCH"
 fi
 
@@ -109,6 +133,13 @@ else
   sha=$(awk -F= '$1=="sha"{print $2}' "${SITE_DIR}/frontend-version.txt")
   short=${sha:0:12}
   git -C "${workdir}/repo" commit -m "frontend: Sub-Store Front End ${version} (${short})"
+  # A root commit is only valid when this script just created the branch.
+  # Pushing one onto an existing gh-pages is not a fast-forward.
+  if [[ "$creating_branch" != "1" ]] && ! git -C "${workdir}/repo" rev-parse --verify --quiet HEAD^ >/dev/null; then
+    echo "::error::Refusing to push a root commit onto existing ${BRANCH}."
+    exit 1
+  fi
+  # Normal push. Do not add --force. The commit sits on the cloned tip.
   git_auth -C "${workdir}/repo" push origin "HEAD:${BRANCH}"
 fi
 

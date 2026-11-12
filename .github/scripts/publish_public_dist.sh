@@ -77,12 +77,17 @@ TOKEN=${TOKEN#bearer}
 basic=$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')
 export GIT_TERMINAL_PROMPT=0
 export GH_TOKEN="$TOKEN"
-# actions/checkout@v6 keeps the job token in an included git config. A fresh
-# clone must not reuse that header, or git prompts for a username and fails
-# before the public repo is contacted.
+# actions/checkout@v6 keeps the job token in an includeIf file as
+# http.https://github.com/.extraheader. That key is multi-valued, so adding
+# another -c extraheader sends both and GitHub returns 400 Duplicate header.
+# An empty value clears the inherited list. Keep this in sync with
+# publish_frontend_pages.sh. Commands here already use -C outside the source
+# checkout; the reset still matters if one of them runs inside it.
 git_auth() {
   git \
     -c credential.helper= \
+    -c http.extraheader= \
+    -c "http.https://github.com/.extraheader=" \
     -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic}" \
     "$@"
 }
