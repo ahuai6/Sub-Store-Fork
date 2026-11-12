@@ -33,6 +33,13 @@ import { normalizeClashYaml } from '@/core/proxy-utils/preprocessors';
 import { applyAgeOutputEncryption } from '@/restful/age-output';
 import { maskAgeSecretInUrl } from '@/utils/age';
 import { isMihomoConfigFile, normalizeFileConfig } from '@/utils/file-type';
+import {
+    collectionOutputMaterial,
+    readCachedOutput,
+    subscriptionOutputMaterial,
+    subscriptionRaw,
+    writeCachedOutput,
+} from '@/utils/output-cache';
 
 export default function register($app) {
     // Initialization
@@ -286,6 +293,7 @@ async function produceArtifact({
     $options,
     proxy,
     noCache,
+    noOutputCache,
     noFlow,
     all,
     includeRaw,
@@ -443,14 +451,32 @@ async function produceArtifact({
                     sourceRaw.push(sub.content);
                 }
             }
+            const outputMaterial = subscriptionOutputMaterial(sub, {
+                platform,
+                produceType,
+                produceOpts,
+                noFlow: skipFlow,
+                raw: sourceRaw,
+                mergeSources: mergeSources || sub.mergeSources,
+                ignoreFailedRemoteSub: subIgnoreFailedRemoteSub,
+                $options,
+                noCache: noCache || sub.noCache,
+                noOutputCache,
+            });
+            const cachedOutput = readCachedOutput(outputMaterial, {
+                includeRaw,
+                raw: subscriptionRaw(sourceRaw),
+            });
+            if (cachedOutput !== undefined) return cachedOutput;
             if (produceType === 'raw') {
                 const result = JSON.stringify(
                     (Array.isArray(raw) ? raw : [raw]).flat(),
                 );
+                writeCachedOutput(outputMaterial, result);
                 return includeRaw
                     ? {
                           result,
-                          raw: Array.isArray(sourceRaw) ? sourceRaw : [sourceRaw],
+                          raw: subscriptionRaw(sourceRaw),
                       }
                     : result;
             }
@@ -500,10 +526,11 @@ async function produceArtifact({
                 produceType,
                 produceOpts,
             );
+            writeCachedOutput(outputMaterial, result);
             return includeRaw
                 ? {
                       result,
-                      raw: Array.isArray(sourceRaw) ? sourceRaw : [sourceRaw],
+                      raw: subscriptionRaw(sourceRaw),
                   }
                 : result;
         } catch (err) {
@@ -567,7 +594,10 @@ async function produceArtifact({
         try {
             const results = {};
             const errors = {};
+            const pending = {};
             let processed = 0;
+            let outputMaterial;
+            let collectionCacheable = true;
 
             await Promise.all(
                 subnames.map(async (name) => {
@@ -663,7 +693,77 @@ async function produceArtifact({
                                 sourceRaw.push(sub.content);
                             }
                         }
-                        // parse proxies
+                        const currentRaw = Array.isArray(sourceRaw)
+                            ? sourceRaw
+                            : [sourceRaw];
+                        pending[name] = { raw, sub, subMode };
+                        rawResults[name] = currentRaw;
+                    } catch (err) {
+                        processed++;
+
+                        if (shouldFallbackIgnoreFailedRemoteSub(subMode)) {
+                            notifyIgnoreFailedRemoteSubFallback({
+                                mode: subMode,
+                                error: err,
+                                notify: (error) => {
+                                    $.notify(
+                                        `🌍 Sub-Store 处理订阅失败`,
+                                        `❌ ${sub.name}`,
+                                        `🤔 原因：${error.message ?? error}`,
+                                    );
+                                },
+                            });
+                            $.error(
+                                `订阅 ${sub.name} 在组合订阅处理中启用兜底后返回空结果: ${
+                                    err.message ?? err
+                                }`,
+                            );
+                            results[name] = [];
+                            rawResults[name] = [];
+                            return;
+                        }
+
+                        errors[name] = err;
+                        rawResults[name] = undefined;
+                        $.error(
+                            `❌ 处理组合订阅中的子订阅: ${
+                                sub.name
+                            }时出现错误：${err}！进度--${
+                                100 * (processed / subnames.length).toFixed(1)
+                            }%`,
+                        );
+                    }
+                }),
+            );
+
+            collectionCacheable = Object.keys(errors).length === 0;
+            if (collectionCacheable) {
+                outputMaterial = collectionOutputMaterial(
+                    collection,
+                    subnames.map((subName) => findByName(allSubs, subName)),
+                    {
+                        platform,
+                        produceType,
+                        produceOpts,
+                        noFlow: skipFlow,
+                        raw: rawResults,
+                        ignoreFailedRemoteSub: collectionIgnoreFailedRemoteSub,
+                        $options,
+                        noCache,
+                        noOutputCache,
+                    },
+                );
+                const cachedOutput = readCachedOutput(outputMaterial, {
+                    includeRaw,
+                    raw: rawResults,
+                });
+                if (cachedOutput !== undefined) return cachedOutput;
+            }
+
+            await Promise.all(
+                Object.keys(pending).map(async (name) => {
+                    const { raw, sub, subMode } = pending[name];
+                    try {
                         let currentProxies = (Array.isArray(raw) ? raw : [raw])
                             .map((i) => ProxyUtils.parse(i))
                             .flat();
@@ -676,10 +776,7 @@ async function produceArtifact({
                                 collection.displayName;
                         });
 
-                        // apply processors
-                        const currentRaw = Array.isArray(sourceRaw)
-                            ? sourceRaw
-                            : [sourceRaw];
+                        const currentRaw = rawResults[name];
                         currentProxies = await ProxyUtils.process(
                             currentProxies,
                             sub.process || [],
@@ -694,7 +791,6 @@ async function produceArtifact({
                             { noFlow: skipFlow || sub.noFlow },
                         );
                         results[name] = currentProxies;
-                        rawResults[name] = currentRaw;
                         processed++;
                         $.info(
                             `✅ 子订阅：${sub.name}加载成功，进度--${
@@ -703,6 +799,7 @@ async function produceArtifact({
                         );
                     } catch (err) {
                         processed++;
+                        collectionCacheable = false;
 
                         if (shouldFallbackIgnoreFailedRemoteSub(subMode)) {
                             notifyIgnoreFailedRemoteSubFallback({
@@ -824,6 +921,9 @@ async function produceArtifact({
                 produceType,
                 produceOpts,
             );
+            if (collectionCacheable) {
+                writeCachedOutput(outputMaterial, result);
+            }
             return includeRaw ? { result, raw: rawResults } : result;
         } catch (err) {
             if (

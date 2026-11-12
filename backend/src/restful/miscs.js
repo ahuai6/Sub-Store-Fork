@@ -7,6 +7,7 @@ import { updateArtifactStore } from '@/restful/settings';
 import resourceCache from '@/utils/resource-cache';
 import scriptResourceCache from '@/utils/script-resource-cache';
 import headersResourceCache from '@/utils/headers-resource-cache';
+import outputCache from '@/utils/output-cache';
 import {
     GIST_BACKUP_FILE_NAME,
     GIST_BACKUP_KEY,
@@ -153,6 +154,7 @@ async function refresh(_, res) {
     resourceCache.revokeAll();
     scriptResourceCache.revokeAll();
     headersResourceCache.revokeAll();
+    outputCache.revokeAll();
     success(res);
 }
 

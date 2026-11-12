@@ -45,6 +45,9 @@ need('backend/src/restful/preview.js', "'preview-sub'");
 need('backend/src/restful/download.js', "'download-sub'");
 need('backend/src/restful/node-info.js', "'node-info'");
 need('backend/src/utils/script-resource-cache.js', 'flush()');
+need('backend/src/utils/output-cache.js', 'resourceCacheTtl');
+need('backend/src/restful/miscs.js', 'outputCache.revokeAll');
+need('backend/scripts/bench.js', 'outputCacheHit5000');
 need('backend/src/vendor/express.js', 'scriptResourceCache.flush');
 need('scripts/check/geo.js', 'time_budget');
 need(

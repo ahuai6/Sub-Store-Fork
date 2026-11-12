@@ -49,6 +49,8 @@ const METRICS = [
     'coldCompileSubStore1',
     'coldEvalSubStore0',
     'coldEvalSubStore1',
+    'outputCacheMiss5000',
+    'outputCacheHit5000',
 ];
 
 function silence(fn) {
@@ -248,6 +250,11 @@ function coldEval(rel, request) {
     };
 }
 
+function loadOutputCache() {
+    const loaded = require(path.join(backendRoot, 'src/utils/output-cache.js'));
+    return loaded.default || loaded;
+}
+
 function loadBaseline() {
     if (!fs.existsSync(baselinePath)) return null;
     return JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
@@ -315,7 +322,7 @@ function printTable(current, baseline) {
     }
     writeLine('');
     writeLine(
-        'Peggy columns are a cold module load plus one parse, which is the per-request cost on Surge. getFlag and produce are warm V8. Cold eval is a fresh vm context of the minified bundle.',
+        'Peggy columns are a cold module load plus one parse, which is the per-request cost on Surge. getFlag and produce are warm V8. Cold eval is a fresh vm context of the minified bundle. outputCacheMiss5000 parses 5000 SS URIs, produces Surge, and stores the body. outputCacheHit5000 reads that body back. The hash is only the key; expiry still forces a miss.',
     );
 }
 
@@ -376,6 +383,21 @@ function main() {
             method: 'GET',
             url: 'https://sub.store/download/not-exist',
             headers: { 'User-Agent': 'Surge iOS' },
+        }),
+        outputCacheMiss5000: bench(() => {
+            const outputCache = loadOutputCache();
+            outputCache.revokeAll();
+            const proxies = ProxyUtils.parse(subscription);
+            const body = ProxyUtils.produce(proxies, 'Surge', 'external');
+            if (!outputCache.set('bench-surge-5000', body)) {
+                throw new Error('output cache refused the bench body');
+            }
+        }),
+        outputCacheHit5000: bench(() => {
+            const body = loadOutputCache().get('bench-surge-5000');
+            if (typeof body !== 'string' || body.length < 1000) {
+                throw new Error('output cache miss during hit sample');
+            }
         }),
     };
 

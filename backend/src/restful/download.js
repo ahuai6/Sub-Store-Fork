@@ -300,6 +300,7 @@ async function downloadSubscription(req, res) {
                 $options,
                 proxy,
                 noCache,
+                noOutputCache: req.query.noOutputCache,
                 noFlow,
             };
             if (_fakeNode || _fakeSub) {
@@ -634,6 +635,7 @@ async function downloadCollection(req, res) {
                 $options,
                 proxy,
                 noCache,
+                noOutputCache: req.query.noOutputCache,
                 noFlow,
                 ua: reqUA,
             });
