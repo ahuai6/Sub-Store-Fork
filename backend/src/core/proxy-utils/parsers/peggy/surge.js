@@ -1,5 +1,7 @@
-import peggy from 'peggy';
-const grammars = String.raw`
+// fork: peggy parsers are precompiled
+import compiledParser from './generated/surge.js';
+
+export const grammars = String.raw`
 // global initializer
 {{
     function $set(obj, path, value) {
@@ -655,7 +657,7 @@ others = comma [^=,]+ equals [^=,]+
 let parser;
 export default function getParser() {
     if (!parser) {
-        parser = peggy.generate(grammars);
+        parser = compiledParser;
     }
     return parser;
 }

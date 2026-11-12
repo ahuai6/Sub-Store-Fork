@@ -5,6 +5,7 @@ const { builtinModules } = require('module');
 const path = require('path');
 const { build } = require('esbuild');
 
+const { precompilePeggy } = require('./scripts/precompile-peggy');
 const objectHasOwnPolyfill = require.resolve('core-js/actual/object/has-own');
 const builtinModuleNames = new Set(
     builtinModules.map((name) => name.replace(/^node:/, '')),
@@ -99,6 +100,7 @@ const nodeBuiltinExternalPlugin = {
 };
 
 !(async () => {
+    precompilePeggy();
     let version;
     try {
         version = JSON.parse(

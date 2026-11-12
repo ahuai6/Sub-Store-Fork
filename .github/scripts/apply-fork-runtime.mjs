@@ -34,8 +34,35 @@ function need(rel, marker) {
     }
 }
 
+function forbid(rel, marker) {
+    const text = read(rel);
+    if (text && text.includes(marker)) {
+        failures.push(`${rel} still contains ${marker}`);
+    }
+}
+
 need('backend/package.json', '"bench"');
 need('backend/src/utils/geo.js', 'fork: getFlag matchers are compiled once');
+need(
+    'backend/src/core/proxy-utils/parsers/peggy/surge.js',
+    'fork: peggy parsers are precompiled',
+);
+need(
+    'backend/src/core/proxy-utils/parsers/peggy/loon.js',
+    'fork: peggy parsers are precompiled',
+);
+need(
+    'backend/src/core/proxy-utils/parsers/peggy/qx.js',
+    'fork: peggy parsers are precompiled',
+);
+need('backend/scripts/precompile-peggy.js', 'precompilePeggy');
+need('backend/bundle-esbuild.js', 'precompilePeggy');
+forbid(
+    'backend/src/core/proxy-utils/parsers/peggy/surge.js',
+    'peggy.generate',
+);
+forbid('backend/src/core/proxy-utils/parsers/peggy/loon.js', 'peggy.generate');
+forbid('backend/src/core/proxy-utils/parsers/peggy/qx.js', 'peggy.generate');
 need('backend/scripts/bench.js', 'getFlag5000');
 need(
     'backend/src/test/proxy-producers/golden-snapshot.spec.js',

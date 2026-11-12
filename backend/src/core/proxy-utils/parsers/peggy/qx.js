@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer';
-import peggy from 'peggy';
+// fork: peggy parsers are precompiled
+import compiledParser from './generated/qx.js';
 
 function decodeQxAlpn(raw) {
     if (typeof raw !== 'string') return undefined;
@@ -17,7 +18,7 @@ function decodeQxAlpn(raw) {
     return alpn;
 }
 
-const grammars = String.raw`
+export const grammars = String.raw`
 // global initializer
 {{
     function $set(obj, path, value) {
@@ -276,18 +277,21 @@ equals = _ "=" _
 _ = [ \r\t]*
 bool = b:("true"/"false") { return b === "true" }
 `;
+export function wrapQxParser(generated) {
+    return {
+        parse(input, options) {
+            const proxy = generated.parse(input, options);
+            const alpn = decodeQxAlpn(proxy['tls-alpn']);
+            if (alpn) proxy.alpn = alpn;
+            return proxy;
+        },
+    };
+}
+
 let parser;
 export default function getParser() {
     if (!parser) {
-        const generated = peggy.generate(grammars);
-        parser = {
-            parse(input, options) {
-                const proxy = generated.parse(input, options);
-                const alpn = decodeQxAlpn(proxy['tls-alpn']);
-                if (alpn) proxy.alpn = alpn;
-                return proxy;
-            },
-        };
+        parser = wrapQxParser(compiledParser);
     }
     return parser;
 }
