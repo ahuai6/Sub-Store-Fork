@@ -1,0 +1,437 @@
+{
+  "node": "v22.23.4",
+  "platform": "linux x64 Intel(R) Xeon(R) Processor",
+  "importProxyUtilsMs": 2783.08,
+  "note": "console silenced during timed sections; V8 JIT; not an on-device Surge measurement",
+  "workloads": {
+    "1000": {
+      "inputBytes": {
+        "mixedUri": 163433,
+        "ssUri": 78174,
+        "surgeSs": 79464,
+        "clashYaml": 110473,
+        "base64OfMixedUri": 217912
+      },
+      "parseMixedUri": {
+        "runs": 3,
+        "minMs": 48.33,
+        "medianMs": 49.82,
+        "maxMs": 50.68,
+        "heapDeltaMB": 1.15,
+        "outputCount": 1000
+      },
+      "parseSsUri": {
+        "runs": 3,
+        "minMs": 5.23,
+        "medianMs": 6.63,
+        "maxMs": 6.88,
+        "heapDeltaMB": -10.47,
+        "outputCount": 1000
+      },
+      "parseSurgeSs": {
+        "runs": 3,
+        "minMs": 15.41,
+        "medianMs": 16.51,
+        "maxMs": 17,
+        "heapDeltaMB": 5.67,
+        "outputCount": 1000
+      },
+      "parseClashYaml": {
+        "runs": 3,
+        "minMs": 120.88,
+        "medianMs": 130.87,
+        "maxMs": 137.09,
+        "heapDeltaMB": 23.5,
+        "outputCount": 1000
+      },
+      "parseBase64": {
+        "runs": 3,
+        "minMs": 50.14,
+        "medianMs": 53.02,
+        "maxMs": 53.75,
+        "heapDeltaMB": 0.55,
+        "outputCount": 1000
+      },
+      "operatorChain": {
+        "runs": 3,
+        "minMs": 56.01,
+        "medianMs": 57.53,
+        "maxMs": 58.99,
+        "heapDeltaMB": 6.04,
+        "outputCount": 1000
+      },
+      "shortcutScript": {
+        "runs": 3,
+        "minMs": 1.16,
+        "medianMs": 1.23,
+        "maxMs": 1.44,
+        "heapDeltaMB": 1.1,
+        "outputCount": 1000
+      },
+      "produceSurge": {
+        "runs": 3,
+        "minMs": 2.44,
+        "medianMs": 2.63,
+        "maxMs": 2.73,
+        "heapDeltaMB": 2.64,
+        "outputChars": 96464
+      },
+      "produceClashMeta": {
+        "runs": 3,
+        "minMs": 3.18,
+        "medianMs": 3.28,
+        "maxMs": 5.3,
+        "heapDeltaMB": 2.32,
+        "outputChars": 157474
+      },
+      "jsonClone": {
+        "runs": 3,
+        "minMs": 0.95,
+        "medianMs": 0.95,
+        "maxMs": 0.97,
+        "heapDeltaMB": 0.69,
+        "outputCount": 1000
+      }
+    },
+    "5000": {
+      "inputBytes": {
+        "mixedUri": 831095,
+        "ssUri": 399354,
+        "surgeSs": 408644,
+        "clashYaml": 563653,
+        "base64OfMixedUri": 1108128
+      },
+      "parseMixedUri": {
+        "runs": 3,
+        "minMs": 125.37,
+        "medianMs": 127.68,
+        "maxMs": 147.74,
+        "heapDeltaMB": 4.71,
+        "outputCount": 5000
+      },
+      "parseSsUri": {
+        "runs": 3,
+        "minMs": 18.79,
+        "medianMs": 18.83,
+        "maxMs": 20.15,
+        "heapDeltaMB": 7,
+        "outputCount": 5000
+      },
+      "parseSurgeSs": {
+        "runs": 3,
+        "minMs": 51.86,
+        "medianMs": 52.13,
+        "maxMs": 52.25,
+        "heapDeltaMB": -5.91,
+        "outputCount": 5000
+      },
+      "parseClashYaml": {
+        "runs": 3,
+        "minMs": 626.38,
+        "medianMs": 744.95,
+        "maxMs": 789.96,
+        "heapDeltaMB": -208.53,
+        "outputCount": 5000
+      },
+      "parseBase64": {
+        "runs": 3,
+        "minMs": 148.87,
+        "medianMs": 154.36,
+        "maxMs": 167.26,
+        "heapDeltaMB": 4.75,
+        "outputCount": 5000
+      },
+      "operatorChain": {
+        "runs": 3,
+        "minMs": 311.29,
+        "medianMs": 333.82,
+        "maxMs": 343.29,
+        "heapDeltaMB": -1.89,
+        "outputCount": 5000
+      },
+      "shortcutScript": {
+        "runs": 3,
+        "minMs": 6.38,
+        "medianMs": 6.4,
+        "maxMs": 8.77,
+        "heapDeltaMB": -14.64,
+        "outputCount": 5000
+      },
+      "produceSurge": {
+        "runs": 3,
+        "minMs": 14.75,
+        "medianMs": 14.84,
+        "maxMs": 15.85,
+        "heapDeltaMB": -2.7,
+        "outputChars": 493644
+      },
+      "produceClashMeta": {
+        "runs": 3,
+        "minMs": 12.78,
+        "medianMs": 13.78,
+        "maxMs": 13.79,
+        "heapDeltaMB": -6.72,
+        "outputChars": 798654
+      },
+      "jsonClone": {
+        "runs": 3,
+        "minMs": 6.05,
+        "medianMs": 6.19,
+        "maxMs": 6.23,
+        "heapDeltaMB": 3.5,
+        "outputCount": 5000
+      }
+    }
+  },
+  "peggy": {
+    "surge": {
+      "name": "surge",
+      "firstGenerateMs": 75.27,
+      "parserType": "object",
+      "hasParse": "function",
+      "cachedGetter": {
+        "runs": 3,
+        "minMs": 0,
+        "medianMs": 0,
+        "maxMs": 0,
+        "heapDeltaMB": 0
+      }
+    },
+    "loon": {
+      "name": "loon",
+      "firstGenerateMs": 29.87,
+      "parserType": "object",
+      "hasParse": "function",
+      "cachedGetter": {
+        "runs": 3,
+        "minMs": 0,
+        "medianMs": 0,
+        "maxMs": 0.01,
+        "heapDeltaMB": 0
+      }
+    },
+    "qx": {
+      "name": "qx",
+      "firstGenerateMs": 22.08,
+      "parserType": "object",
+      "hasParse": "function",
+      "cachedGetter": {
+        "runs": 3,
+        "minMs": 0,
+        "medianMs": 0,
+        "maxMs": 0,
+        "heapDeltaMB": 0
+      }
+    }
+  },
+  "store": {
+    "stringify1000Proxies": {
+      "runs": 3,
+      "minMs": 0.56,
+      "medianMs": 0.57,
+      "maxMs": 0.69,
+      "heapDeltaMB": 0.28,
+      "outputChars": 147466
+    },
+    "parse1000Proxies": {
+      "runs": 3,
+      "minMs": 0.35,
+      "medianMs": 0.35,
+      "maxMs": 0.35,
+      "heapDeltaMB": 0.24,
+      "outputCount": 1000
+    },
+    "prettyStringify1000": {
+      "runs": 3,
+      "minMs": 0.73,
+      "medianMs": 0.73,
+      "maxMs": 0.85,
+      "heapDeltaMB": 0.38,
+      "outputChars": 201467
+    },
+    "stringify3_5MiB": {
+      "runs": 3,
+      "minMs": 11.18,
+      "medianMs": 11.35,
+      "maxMs": 11.77,
+      "heapDeltaMB": 3.5,
+      "outputChars": 3670027
+    },
+    "parse3_5MiB": {
+      "runs": 3,
+      "minMs": 2.92,
+      "medianMs": 2.98,
+      "maxMs": 3.65,
+      "heapDeltaMB": 3.5
+    },
+    "payload": {
+      "proxies1000": {
+        "bytes": 151716,
+        "kib": 148.16,
+        "mib": 0.14
+      },
+      "pretty1000": {
+        "bytes": 205717,
+        "kib": 200.9,
+        "mib": 0.2
+      },
+      "fat": {
+        "bytes": 3670027,
+        "kib": 3584.01,
+        "mib": 3.5
+      }
+    }
+  },
+  "bundles": [
+    {
+      "file": "backend/dist/sub-store-0.min.js",
+      "raw": {
+        "bytes": 1338153,
+        "kib": 1306.79,
+        "mib": 1.28
+      },
+      "gzip": {
+        "bytes": 396065,
+        "kib": 386.78,
+        "mib": 0.38
+      }
+    },
+    {
+      "file": "backend/dist/sub-store-1.min.js",
+      "raw": {
+        "bytes": 1327056,
+        "kib": 1295.95,
+        "mib": 1.27
+      },
+      "gzip": {
+        "bytes": 392244,
+        "kib": 383.05,
+        "mib": 0.37
+      }
+    },
+    {
+      "file": "backend/dist/cron-sync-artifacts.min.js",
+      "raw": {
+        "bytes": 1288527,
+        "kib": 1258.33,
+        "mib": 1.23
+      },
+      "gzip": {
+        "bytes": 381324,
+        "kib": 372.39,
+        "mib": 0.36
+      }
+    },
+    {
+      "file": "backend/dist/sub-store-parser.loon.min.js",
+      "raw": {
+        "bytes": 1281277,
+        "kib": 1251.25,
+        "mib": 1.22
+      },
+      "gzip": {
+        "bytes": 379409,
+        "kib": 370.52,
+        "mib": 0.36
+      }
+    },
+    {
+      "file": "backend/dist/proxy-utils.esm.mjs",
+      "raw": {
+        "bytes": 1279104,
+        "kib": 1249.13,
+        "mib": 1.22
+      },
+      "gzip": {
+        "bytes": 378864,
+        "kib": 369.98,
+        "mib": 0.36
+      }
+    },
+    {
+      "file": "backend/dist/sub-store.bundle.js",
+      "raw": {
+        "bytes": 3351668,
+        "kib": 3273.11,
+        "mib": 3.2
+      },
+      "gzip": {
+        "bytes": 1049215,
+        "kib": 1024.62,
+        "mib": 1
+      }
+    },
+    {
+      "file": "backend/sub-store.min.js",
+      "raw": {
+        "bytes": 1385212,
+        "kib": 1352.75,
+        "mib": 1.32
+      },
+      "gzip": {
+        "bytes": 411927,
+        "kib": 402.27,
+        "mib": 0.39
+      }
+    }
+  ],
+  "compile": [
+    {
+      "file": "sub-store-0.min.js",
+      "compile": {
+        "runs": 3,
+        "minMs": 0,
+        "medianMs": 0.03,
+        "maxMs": 41.84
+      }
+    },
+    {
+      "file": "sub-store-1.min.js",
+      "compile": {
+        "runs": 3,
+        "minMs": 0,
+        "medianMs": 0.02,
+        "maxMs": 26.55
+      }
+    },
+    {
+      "file": "cron-sync-artifacts.min.js",
+      "compile": {
+        "runs": 3,
+        "minMs": 0.01,
+        "medianMs": 0.02,
+        "maxMs": 25.62
+      }
+    }
+  ],
+  "sandboxEval": {
+    "note": "Fresh V8 vm.Script + runInNewContext with stubbed Surge globals. Does not execute user scripts or parse a subscription.",
+    "sub-store-0 /api/utils/env": {
+      "compileMs": 26.37,
+      "runMs": 45,
+      "totalMs": 71.37,
+      "status": 200
+    },
+    "sub-store-1 /download/missing": {
+      "compileMs": 23.15,
+      "runMs": 39.24,
+      "totalMs": 62.39,
+      "status": 404
+    }
+  },
+  "operatorIsolation5000ss": {
+    "note": "Median of 3 runs, V8, 5000 already-parsed ss proxies, console silenced except the reporter.",
+    "regexFilterMs": 2.57,
+    "typeFilterMs": 0.47,
+    "regexRenameMs": 6.12,
+    "flagOperatorMs": 275.89,
+    "sortMs": 5.23,
+    "scriptOperatorMs": 4.39,
+    "regionFilterMs": 267.32
+  },
+  "vmScriptCold": {
+    "sub-store-0.min.js": 25,
+    "sub-store-1.min.js": 21.44,
+    "cron-sync-artifacts.min.js": 20.92
+  }
+}

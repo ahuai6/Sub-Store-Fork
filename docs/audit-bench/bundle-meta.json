@@ -1,0 +1,458 @@
+{
+  "src/products/sub-store-0.js": {
+    "outputBytes": 1318716,
+    "totalInputBytes": 3644651,
+    "grouped": [
+      {
+        "name": "src",
+        "bytes": 1048138
+      },
+      {
+        "name": "lodash",
+        "bytes": 545945
+      },
+      {
+        "name": "@noble/curves",
+        "bytes": 505254
+      },
+      {
+        "name": "jsrsasign",
+        "bytes": 345321
+      },
+      {
+        "name": "yaml",
+        "bytes": 279703
+      },
+      {
+        "name": "peggy",
+        "bytes": 223178
+      },
+      {
+        "name": "@noble/hashes",
+        "bytes": 129681
+      },
+      {
+        "name": "ip-address",
+        "bytes": 106752
+      },
+      {
+        "name": "@noble/ciphers",
+        "bytes": 82624
+      },
+      {
+        "name": "json5",
+        "bytes": 58620
+      },
+      {
+        "name": "buffer",
+        "bytes": 58353
+      },
+      {
+        "name": "age-encryption",
+        "bytes": 55979
+      },
+      {
+        "name": "dns-packet",
+        "bytes": 51705
+      },
+      {
+        "name": "source-map-generator",
+        "bytes": 46524
+      },
+      {
+        "name": "@scure/base",
+        "bytes": 41474
+      },
+      {
+        "name": "@noble/post-quantum",
+        "bytes": 39367
+      },
+      {
+        "name": "js-base64",
+        "bytes": 10472
+      },
+      {
+        "name": "@leichtgewicht/ip-codec",
+        "bytes": 7160
+      },
+      {
+        "name": "base64-js",
+        "bytes": 3932
+      },
+      {
+        "name": "fastestsmallesttextencoderdecoder",
+        "bytes": 2315
+      },
+      {
+        "name": "ieee754",
+        "bytes": 2154
+      }
+    ],
+    "largestFiles": [
+      {
+        "file": "node_modules/lodash/lodash.js",
+        "bytes": 545945
+      },
+      {
+        "file": "node_modules/jsrsasign/lib/jsrsasign.js",
+        "bytes": 345321
+      },
+      {
+        "file": "node_modules/peggy/lib/parser.js",
+        "bytes": 125642
+      },
+      {
+        "file": "src/core/proxy-utils/parsers/index.js",
+        "bytes": 116254
+      },
+      {
+        "file": "src/core/proxy-utils/producers/sing-box.js",
+        "bytes": 68237
+      },
+      {
+        "file": "node_modules/@noble/curves/abstract/weierstrass.js",
+        "bytes": 63508
+      },
+      {
+        "file": "src/core/proxy-utils/producers/uri.js",
+        "bytes": 63374
+      },
+      {
+        "file": "node_modules/ip-address/dist/ipv6.js",
+        "bytes": 60225
+      },
+      {
+        "file": "src/core/proxy-utils/processors/index.js",
+        "bytes": 59062
+      },
+      {
+        "file": "node_modules/json5/dist/index.js",
+        "bytes": 58620
+      },
+      {
+        "file": "node_modules/buffer/index.js",
+        "bytes": 58353
+      },
+      {
+        "file": "node_modules/@noble/curves/abstract/weierstrass.js",
+        "bytes": 52556
+      },
+      {
+        "file": "src/restful/sync.js",
+        "bytes": 50371
+      },
+      {
+        "file": "src/core/proxy-utils/producers/surge.js",
+        "bytes": 46211
+      },
+      {
+        "file": "node_modules/dns-packet/index.js",
+        "bytes": 44599
+      }
+    ]
+  },
+  "src/products/sub-store-1.js": {
+    "outputBytes": 1307936,
+    "totalInputBytes": 3614795,
+    "grouped": [
+      {
+        "name": "src",
+        "bytes": 1018282
+      },
+      {
+        "name": "lodash",
+        "bytes": 545945
+      },
+      {
+        "name": "@noble/curves",
+        "bytes": 505254
+      },
+      {
+        "name": "jsrsasign",
+        "bytes": 345321
+      },
+      {
+        "name": "yaml",
+        "bytes": 279703
+      },
+      {
+        "name": "peggy",
+        "bytes": 223178
+      },
+      {
+        "name": "@noble/hashes",
+        "bytes": 129681
+      },
+      {
+        "name": "ip-address",
+        "bytes": 106752
+      },
+      {
+        "name": "@noble/ciphers",
+        "bytes": 82624
+      },
+      {
+        "name": "json5",
+        "bytes": 58620
+      },
+      {
+        "name": "buffer",
+        "bytes": 58353
+      },
+      {
+        "name": "age-encryption",
+        "bytes": 55979
+      },
+      {
+        "name": "dns-packet",
+        "bytes": 51705
+      },
+      {
+        "name": "source-map-generator",
+        "bytes": 46524
+      },
+      {
+        "name": "@scure/base",
+        "bytes": 41474
+      },
+      {
+        "name": "@noble/post-quantum",
+        "bytes": 39367
+      },
+      {
+        "name": "js-base64",
+        "bytes": 10472
+      },
+      {
+        "name": "@leichtgewicht/ip-codec",
+        "bytes": 7160
+      },
+      {
+        "name": "base64-js",
+        "bytes": 3932
+      },
+      {
+        "name": "fastestsmallesttextencoderdecoder",
+        "bytes": 2315
+      },
+      {
+        "name": "ieee754",
+        "bytes": 2154
+      }
+    ],
+    "largestFiles": [
+      {
+        "file": "node_modules/lodash/lodash.js",
+        "bytes": 545945
+      },
+      {
+        "file": "node_modules/jsrsasign/lib/jsrsasign.js",
+        "bytes": 345321
+      },
+      {
+        "file": "node_modules/peggy/lib/parser.js",
+        "bytes": 125642
+      },
+      {
+        "file": "src/core/proxy-utils/parsers/index.js",
+        "bytes": 116254
+      },
+      {
+        "file": "src/core/proxy-utils/producers/sing-box.js",
+        "bytes": 68237
+      },
+      {
+        "file": "node_modules/@noble/curves/abstract/weierstrass.js",
+        "bytes": 63508
+      },
+      {
+        "file": "src/core/proxy-utils/producers/uri.js",
+        "bytes": 63374
+      },
+      {
+        "file": "node_modules/ip-address/dist/ipv6.js",
+        "bytes": 60225
+      },
+      {
+        "file": "src/core/proxy-utils/processors/index.js",
+        "bytes": 59062
+      },
+      {
+        "file": "node_modules/json5/dist/index.js",
+        "bytes": 58620
+      },
+      {
+        "file": "node_modules/buffer/index.js",
+        "bytes": 58353
+      },
+      {
+        "file": "node_modules/@noble/curves/abstract/weierstrass.js",
+        "bytes": 52556
+      },
+      {
+        "file": "src/restful/sync.js",
+        "bytes": 50371
+      },
+      {
+        "file": "src/core/proxy-utils/producers/surge.js",
+        "bytes": 46211
+      },
+      {
+        "file": "node_modules/dns-packet/index.js",
+        "bytes": 44599
+      }
+    ]
+  },
+  "src/products/cron-sync-artifacts.js": {
+    "outputBytes": 1269698,
+    "totalInputBytes": 3534753,
+    "grouped": [
+      {
+        "name": "src",
+        "bytes": 938240
+      },
+      {
+        "name": "lodash",
+        "bytes": 545945
+      },
+      {
+        "name": "@noble/curves",
+        "bytes": 505254
+      },
+      {
+        "name": "jsrsasign",
+        "bytes": 345321
+      },
+      {
+        "name": "yaml",
+        "bytes": 279703
+      },
+      {
+        "name": "peggy",
+        "bytes": 223178
+      },
+      {
+        "name": "@noble/hashes",
+        "bytes": 129681
+      },
+      {
+        "name": "ip-address",
+        "bytes": 106752
+      },
+      {
+        "name": "@noble/ciphers",
+        "bytes": 82624
+      },
+      {
+        "name": "json5",
+        "bytes": 58620
+      },
+      {
+        "name": "buffer",
+        "bytes": 58353
+      },
+      {
+        "name": "age-encryption",
+        "bytes": 55979
+      },
+      {
+        "name": "dns-packet",
+        "bytes": 51705
+      },
+      {
+        "name": "source-map-generator",
+        "bytes": 46524
+      },
+      {
+        "name": "@scure/base",
+        "bytes": 41474
+      },
+      {
+        "name": "@noble/post-quantum",
+        "bytes": 39367
+      },
+      {
+        "name": "js-base64",
+        "bytes": 10472
+      },
+      {
+        "name": "@leichtgewicht/ip-codec",
+        "bytes": 7160
+      },
+      {
+        "name": "base64-js",
+        "bytes": 3932
+      },
+      {
+        "name": "fastestsmallesttextencoderdecoder",
+        "bytes": 2315
+      },
+      {
+        "name": "ieee754",
+        "bytes": 2154
+      }
+    ],
+    "largestFiles": [
+      {
+        "file": "node_modules/lodash/lodash.js",
+        "bytes": 545945
+      },
+      {
+        "file": "node_modules/jsrsasign/lib/jsrsasign.js",
+        "bytes": 345321
+      },
+      {
+        "file": "node_modules/peggy/lib/parser.js",
+        "bytes": 125642
+      },
+      {
+        "file": "src/core/proxy-utils/parsers/index.js",
+        "bytes": 116254
+      },
+      {
+        "file": "src/core/proxy-utils/producers/sing-box.js",
+        "bytes": 68237
+      },
+      {
+        "file": "node_modules/@noble/curves/abstract/weierstrass.js",
+        "bytes": 63508
+      },
+      {
+        "file": "src/core/proxy-utils/producers/uri.js",
+        "bytes": 63374
+      },
+      {
+        "file": "node_modules/ip-address/dist/ipv6.js",
+        "bytes": 60225
+      },
+      {
+        "file": "src/core/proxy-utils/processors/index.js",
+        "bytes": 59062
+      },
+      {
+        "file": "node_modules/json5/dist/index.js",
+        "bytes": 58620
+      },
+      {
+        "file": "node_modules/buffer/index.js",
+        "bytes": 58353
+      },
+      {
+        "file": "node_modules/@noble/curves/abstract/weierstrass.js",
+        "bytes": 52556
+      },
+      {
+        "file": "src/restful/sync.js",
+        "bytes": 50371
+      },
+      {
+        "file": "src/core/proxy-utils/producers/surge.js",
+        "bytes": 46211
+      },
+      {
+        "file": "node_modules/dns-packet/index.js",
+        "bytes": 44599
+      }
+    ]
+  }
+}
