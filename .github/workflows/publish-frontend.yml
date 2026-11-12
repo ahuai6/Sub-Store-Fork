@@ -9,6 +9,10 @@ name: publish-frontend
 # it). Master is built when it has commits the latest release does not,
 # because upstream only releases when package.json changes.
 #
+# frontend-version.txt records a patch stamp from prepare_frontend_pages.py.
+# A new stamp rebuilds even when the upstream sha, base, and API URL match.
+# workflow_dispatch input force=true rebuilds regardless.
+#
 # The site directory is pushed from this job. Nothing is uploaded as an
 # Actions artifact.
 on:
@@ -70,19 +74,26 @@ jobs:
           deployed_sha=$(printf '%s\n' "$text" | awk -F= '$1=="sha"{print $2}')
           deployed_base=$(printf '%s\n' "$text" | awk -F= '$1=="base"{print $2}')
           deployed_api=$(printf '%s\n' "$text" | awk -F= '$1=="api"{print $2}')
+          deployed_patches=$(printf '%s\n' "$text" | awk -F= '$1=="patches"{print $2}')
+          expected_patches=$(python3 .github/scripts/prepare_frontend_pages.py --print-patch-stamp)
+          if [[ -z "$expected_patches" || "$expected_patches" == *$'\n'* ]]; then
+            echo "::error::patch stamp from prepare_frontend_pages.py is empty or multiline"
+            exit 1
+          fi
           if [[ "$deployed_sha" == "${{ steps.resolve.outputs.sha }}" \
             && "$deployed_base" == "/Sub-Store-Fork-Dist/" \
-            && "$deployed_api" == "https://sub.store" ]]; then
+            && "$deployed_api" == "https://sub.store" \
+            && "$deployed_patches" == "$expected_patches" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             {
               echo "### Front end already deployed"
               echo ""
-              echo "\`${deployed_sha}\` is already on \`gh-pages\` with the Pages base and \`https://sub.store\`."
+              echo "\`${deployed_sha}\` is already on \`gh-pages\` with the Pages base, \`https://sub.store\`, and patch stamp \`${expected_patches}\`."
               echo ""
               echo "https://ahuai6.github.io/Sub-Store-Fork-Dist/"
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Deployed ${deployed_sha:-<none>} -> ${{ steps.resolve.outputs.sha }}"
+            echo "Deployed sha=${deployed_sha:-<none>} patches=${deployed_patches:-<none>} -> sha=${{ steps.resolve.outputs.sha }} patches=${expected_patches}"
           fi
 
       - name: Checkout front end
