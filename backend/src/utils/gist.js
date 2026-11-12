@@ -65,8 +65,10 @@ export default class Gist {
         });
         let proxy = defaultProxy;
         if ($.env.isNode) {
+            /* @non-surge-start */
             proxy =
                 proxy || eval('process.env.SUB_STORE_BACKEND_DEFAULT_PROXY');
+            /* @non-surge-end */
         }
 
         if (syncPlatform === 'gitlab') {

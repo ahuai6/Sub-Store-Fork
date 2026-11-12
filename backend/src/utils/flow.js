@@ -67,7 +67,9 @@ export async function getFlowHeaders(
         $.read(SETTINGS_KEY) || {};
     let proxy = customProxy || defaultProxy;
     if ($.env.isNode) {
+        /* @non-surge-start */
         proxy = proxy || eval('process.env.SUB_STORE_BACKEND_DEFAULT_PROXY');
+        /* @non-surge-end */
     }
     const userAgent = ua || defaultFlowUserAgent || 'clash.meta/v1.19.23';
     const requestTimeout = timeout || defaultTimeout || 8000;

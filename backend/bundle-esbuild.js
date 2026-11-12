@@ -4,6 +4,7 @@ const { parseSync, traverse } = require('@babel/core');
 const { builtinModules } = require('module');
 const path = require('path');
 const { build } = require('esbuild');
+const { stripNonSurgeRegions } = require('./surge-only-strip');
 
 const objectHasOwnPolyfill = require.resolve('core-js/actual/object/has-own');
 const builtinModuleNames = new Set(
@@ -98,6 +99,83 @@ const nodeBuiltinExternalPlugin = {
     },
 };
 
+// Sub-store-0 and sub-store-1 run only inside Surge. Other artifacts keep
+// runtime host detection. `__SURGE_ONLY__` is a boolean either way so the
+// ternaries in src/runtime/build-flags.js fold instead of staying live.
+const surgeOnlyDefine = {
+    __SURGE_ONLY__: 'true',
+    $platform: '"Surge"',
+};
+const dynamicHostDefine = {
+    __SURGE_ONLY__: 'false',
+};
+
+const surgeOnlyStripPlugin = {
+    name: 'surge-only-strip',
+    setup(build) {
+        build.onLoad({ filter: /\.js$/ }, async (args) => {
+            if (!args.path.split(path.sep).includes('src')) return;
+            const contents = await fs.promises.readFile(args.path, 'utf8');
+            if (!contents.includes('@non-surge-')) return;
+            return {
+                contents: stripNonSurgeRegions(contents, args.path),
+                loader: 'js',
+            };
+        });
+    },
+};
+
+const SURGE_BUNDLE_ABSENT = [
+    'undici',
+    'shoutrrr',
+    'dotenv',
+    'geoip2',
+    'fetch-socks',
+    'require("express")',
+    "require('express')",
+    'require("body-parser")',
+    '$task.fetch',
+    '$prefs',
+    'stash-version',
+];
+const SURGE_BUNDLE_PRESENT = [
+    'policy-descriptor',
+    'sing-box',
+    'lodash',
+    '$httpClient',
+    '$persistentStore',
+    'vmess',
+];
+
+function assertBundleText(file, { absent = [], present = [] }) {
+    const text = fs.readFileSync(file, 'utf8');
+    for (const token of absent) {
+        if (text.includes(token)) {
+            throw new Error(`${file} still contains ${JSON.stringify(token)}`);
+        }
+    }
+    for (const token of present) {
+        if (!text.includes(token)) {
+            throw new Error(`${file} is missing ${JSON.stringify(token)}`);
+        }
+    }
+}
+
+function assertSurgeOnlyBundles() {
+    for (const rel of ['dist/sub-store-0.min.js', 'dist/sub-store-1.min.js']) {
+        assertBundleText(path.join(__dirname, rel), {
+            absent: SURGE_BUNDLE_ABSENT,
+            present: SURGE_BUNDLE_PRESENT,
+        });
+    }
+    assertBundleText(path.join(__dirname, 'sub-store.min.js'), {
+        present: ['undici', 'dotenv', "eval('import(\"shoutrrr-ts\")')"],
+    });
+    assertBundleText(path.join(__dirname, 'dist/sub-store.bundle.js'), {
+        present: ['undici', 'service is not supported by shoutrrr-ts'],
+    });
+}
+
 !(async () => {
     let version;
     try {
@@ -120,8 +198,16 @@ const nodeBuiltinExternalPlugin = {
             src: 'src/products/cron-sync-artifacts.js',
             dest: 'dist/cron-sync-artifacts.min.js',
         },
-        { src: 'src/products/sub-store-0.js', dest: 'dist/sub-store-0.min.js' },
-        { src: 'src/products/sub-store-1.js', dest: 'dist/sub-store-1.min.js' },
+        {
+            src: 'src/products/sub-store-0.js',
+            dest: 'dist/sub-store-0.min.js',
+            surgeOnly: true,
+        },
+        {
+            src: 'src/products/sub-store-1.js',
+            dest: 'dist/sub-store-1.min.js',
+            surgeOnly: true,
+        },
     ];
     const browserMetafiles = [];
 
@@ -135,7 +221,10 @@ const nodeBuiltinExternalPlugin = {
             format: 'iife',
             outfile: artifact.dest,
             inject: [objectHasOwnPolyfill],
-            plugins: [nodeBuiltinExternalPlugin],
+            define: artifact.surgeOnly ? surgeOnlyDefine : dynamicHostDefine,
+            plugins: artifact.surgeOnly
+                ? [nodeBuiltinExternalPlugin, surgeOnlyStripPlugin]
+                : [nodeBuiltinExternalPlugin],
             metafile: true,
         });
         browserMetafiles.push(browserBuild.metafile);
@@ -158,6 +247,7 @@ const nodeBuiltinExternalPlugin = {
             format: 'esm',
             outfile: artifact.dest,
             inject: [objectHasOwnPolyfill],
+            define: dynamicHostDefine,
             plugins: [nodeBuiltinExternalPlugin],
             metafile: true,
         });
@@ -194,6 +284,9 @@ const nodeBuiltinExternalPlugin = {
         platform: 'node',
         format: 'cjs',
         outfile: 'dist/sub-store.bundle.js',
+        // The input is already the non-Surge browser artifact. Do not pin it
+        // to Surge and do not strip host adapters a second time.
+        define: dynamicHostDefine,
         metafile: true,
         // `sub-store.no-bundle.js` comes from `sub-store.min.js`, which already
         // has the Object.hasOwn polyfill injected in the first build stage.
@@ -220,6 +313,7 @@ ${fs.readFileSync(path.join(__dirname, 'dist/sub-store.bundle.js'), {
             2,
         )}\n`,
     );
+    assertSurgeOnlyBundles();
 })()
     .catch((e) => {
         console.error(e);

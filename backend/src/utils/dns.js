@@ -155,10 +155,18 @@ export async function doh({
         insecure: skipCertVerify === true,
     });
 
-    return dnsPacket.decode(Buffer.from($.env.isQX ? res.bodyBytes : res.body));
+    return dnsPacket.decode(
+        Buffer.from(
+            /* @non-surge-start */
+            $.env.isQX ? res.bodyBytes :
+            /* @non-surge-end */
+            res.body,
+        ),
+    );
 }
 
 async function queryDnsOverUdp({ server, domain, type = 'A', timeout, edns }) {
+    /* @non-surge-start */
     const dgram = getDgram();
     const buf = buildDnsQuery({
         domain,
@@ -206,6 +214,7 @@ async function queryDnsOverUdp({ server, domain, type = 'A', timeout, edns }) {
             if (error) finish(error);
         });
     });
+    /* @non-surge-end */
 }
 
 async function queryDnsOverTcp({
@@ -216,6 +225,7 @@ async function queryDnsOverTcp({
     edns,
     skipCertVerify,
 }) {
+    /* @non-surge-start */
     const transport = server.protocol === 'tls' ? getTls() : getNet();
     const transportName = server.protocol === 'tls' ? 'TLS' : 'TCP';
     const payload = buildDnsQuery({
@@ -302,6 +312,7 @@ async function queryDnsOverTcp({
             }
         });
     });
+    /* @non-surge-end */
 }
 
 export async function resolveDns({
@@ -327,6 +338,7 @@ export async function resolveDns({
         raw &&
         (!protocol || ['udp', 'h3', 'quic'].includes(protocol))
     ) {
+        /* @non-surge-start */
         if (typeof $dns === 'undefined' || typeof $dns?.query !== 'function') {
             throw new Error('Loon DNS API 需要 Loon Build ≥ 988');
         }
@@ -354,6 +366,7 @@ export async function resolveDns({
                 data: value,
             })),
         };
+        /* @non-surge-end */
     }
     if (
         raw &&

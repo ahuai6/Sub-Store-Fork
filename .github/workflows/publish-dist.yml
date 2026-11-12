@@ -85,6 +85,10 @@ jobs:
       - name: Bundle
         run: |
           cd backend
+          # sub-store-0 and sub-store-1 are the Surge-only bundles. The Node
+          # bundle and the other script artifacts stay on runtime host detection.
+          # bundle-esbuild.js checks that the Surge files dropped the other
+          # host adapters and that sub-store.bundle.js still has them.
           pnpm bundle:esbuild
 
       - name: Render Surge beta module

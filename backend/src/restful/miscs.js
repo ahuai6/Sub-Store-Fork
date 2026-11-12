@@ -46,9 +46,12 @@ export default function register($app) {
                     )}"`,
                 )
                 .send(
+                    /* @non-surge-start */
                     $.env.isNode
                         ? JSON.stringify($.cache)
-                        : $.read('#sub-store'),
+                        :
+                    /* @non-surge-end */
+                    $.read('#sub-store'),
                 );
         })
         .post((req, res) => {
@@ -78,8 +81,10 @@ export default function register($app) {
                 }
                 $.write(JSON.stringify(content, null, `  `), '#sub-store');
                 if ($.env.isNode) {
+                    /* @non-surge-start */
                     $.cache = content;
                     $.persistCache();
+                    /* @non-surge-end */
                 }
                 migrate();
                 success(res);
@@ -99,7 +104,9 @@ export default function register($app) {
         });
 
     if (ENV().isNode) {
+        /* @non-surge-start */
         $app.get('/', getEnv);
+        /* @non-surge-end */
     } else {
         // Redirect sub.store to the self-hosted GitHub Pages frontend.
         // Reapplied by .github/scripts/apply-fork-frontend.mjs after upstream merges.
@@ -113,9 +120,11 @@ export default function register($app) {
 
     // handle preflight request for QX
     if (ENV().isQX) {
+        /* @non-surge-start */
         $app.options('/', async (req, res) => {
             res.status(200).end();
         });
+        /* @non-surge-end */
     }
 
     $app.all('/', (_, res) => {
@@ -159,7 +168,11 @@ async function refresh(_, res) {
 function readCurrentBackupContent() {
     let content = $.read('#sub-store');
     content = content ? JSON.parse(content) : {};
-    if ($.env.isNode) content = JSON.parse(JSON.stringify($.cache));
+    if ($.env.isNode) {
+        /* @non-surge-start */
+        content = JSON.parse(JSON.stringify($.cache));
+        /* @non-surge-end */
+    }
     return content;
 }
 
@@ -435,8 +448,10 @@ async function gistBackupAction(
             // restore settings
             $.write(JSON.stringify(content, null, `  `), '#sub-store');
             if ($.env.isNode) {
+                /* @non-surge-start */
                 $.cache = content;
                 $.persistCache();
+                /* @non-surge-end */
             }
             $.info(`perform migration after restoring from gist...`);
             migrate();

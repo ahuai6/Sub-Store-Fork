@@ -1,19 +1,27 @@
 /* eslint-disable no-undef */
 import { installConsoleLogCapture } from '@/utils/debug-logs';
 import getFs from '@/runtime/fs';
+import { SURGE_ONLY } from '@/runtime/build-flags';
 
-const isQX = typeof $task !== 'undefined';
-const isLoon = typeof $loon !== 'undefined';
-const isEgern = 'undefined' !== typeof Egern;
+// Surge bundles fold these to constants. Other builds fold SURGE_ONLY to
+// false and keep the original runtime tests. Regions marked @non-surge are
+// deleted from the Surge bundles only; they stay in every other build.
+const isQX = SURGE_ONLY ? false : typeof $task !== 'undefined';
+const isLoon = SURGE_ONLY ? false : typeof $loon !== 'undefined';
+const isEgern = SURGE_ONLY ? false : 'undefined' !== typeof Egern;
+const isNode = SURGE_ONLY
+    ? false
+    : eval(`typeof process !== "undefined"`); // eval is needed in order to avoid browserify processing
+const isStash = SURGE_ONLY
+    ? false
+    : 'undefined' !== typeof $environment && $environment['stash-version'];
+const isShadowRocket = SURGE_ONLY ? false : 'undefined' !== typeof $rocket;
+const isLanceX = SURGE_ONLY ? false : 'undefined' != typeof $native;
+const isGUIforCores = SURGE_ONLY ? false : typeof $Plugins !== 'undefined';
 // 可能有一些兼容环境依赖于这个, 先不改成 $environment.surge-version
-const isSurge = typeof $httpClient !== 'undefined' && !isLoon && !isEgern;
-const isNode = eval(`typeof process !== "undefined"`); // eval is needed in order to avoid browserify processing
-const isStash =
-    'undefined' !== typeof $environment && $environment['stash-version'];
-const isShadowRocket = 'undefined' !== typeof $rocket;
-
-const isLanceX = 'undefined' != typeof $native;
-const isGUIforCores = typeof $Plugins !== 'undefined';
+const isSurge = SURGE_ONLY
+    ? true
+    : typeof $httpClient !== 'undefined' && !isLoon && !isEgern;
 import { Base64 } from 'js-base64';
 
 function isPlainObject(obj) {
@@ -74,16 +82,20 @@ export class OpenAPI {
         this.env = ENV();
 
         if (isNode) {
+            /* @non-surge-start */
             const dotenv = eval(`require("dotenv")`);
             dotenv.config();
+            /* @non-surge-end */
         }
         this.node = (() => {
             if (isNode) {
+                /* @non-surge-start */
                 const fs = getFs();
 
                 return {
                     fs,
                 };
+                /* @non-surge-end */
             } else {
                 return null;
             }
@@ -105,15 +117,22 @@ export class OpenAPI {
     // persistence
     // initialize cache
     initCache() {
-        if (isQX)
+        if (isQX) {
+            /* @non-surge-start */
             this.cache = JSON.parse($prefs.valueForKey(this.name) || '{}');
+            /* @non-surge-end */
+        }
         if (isLoon || isSurge || isEgern)
             this.cache = JSON.parse($persistentStore.read(this.name) || '{}');
-        if (isGUIforCores)
+        if (isGUIforCores) {
+            /* @non-surge-start */
             this.cache = JSON.parse(
                 $Plugins.SubStoreCache.get(this.name) || '{}',
             );
+            /* @non-surge-end */
+        }
         if (isNode) {
+            /* @non-surge-start */
             // create a json for root cache
             const basePath =
                 eval('process.env.SUB_STORE_DATA_BASE_PATH') || '.';
@@ -177,17 +196,27 @@ export class OpenAPI {
                 });
                 this.cache = {};
             }
+            /* @non-surge-end */
         }
     }
 
     // store cache
     persistCache() {
         const data = JSON.stringify(this.cache, null, 2);
-        if (isQX) $prefs.setValueForKey(data, this.name);
+        if (isQX) {
+            /* @non-surge-start */
+            $prefs.setValueForKey(data, this.name);
+            /* @non-surge-end */
+        }
         if (isLoon || isSurge || isEgern)
             $persistentStore.write(data, this.name);
-        if (isGUIforCores) $Plugins.SubStoreCache.set(this.name, data);
+        if (isGUIforCores) {
+            /* @non-surge-start */
+            $Plugins.SubStoreCache.set(this.name, data);
+            /* @non-surge-end */
+        }
         if (isNode) {
+            /* @non-surge-start */
             const basePath =
                 eval('process.env.SUB_STORE_DATA_BASE_PATH') || '.';
 
@@ -203,6 +232,7 @@ export class OpenAPI {
                 { flag: 'w' },
                 (err) => console.log(err),
             );
+            /* @non-surge-end */
         }
     }
 
@@ -214,13 +244,19 @@ export class OpenAPI {
                 return $persistentStore.write(data, key);
             }
             if (isQX) {
+                /* @non-surge-start */
                 return $prefs.setValueForKey(data, key);
+                /* @non-surge-end */
             }
             if (isNode) {
+                /* @non-surge-start */
                 this.root[key] = data;
+                /* @non-surge-end */
             }
             if (isGUIforCores) {
+                /* @non-surge-start */
                 return $Plugins.SubStoreCache.set(key, data);
+                /* @non-surge-end */
             }
         } else {
             this.cache[key] = data;
@@ -236,13 +272,19 @@ export class OpenAPI {
                 return $persistentStore.read(key);
             }
             if (isQX) {
+                /* @non-surge-start */
                 return $prefs.valueForKey(key);
+                /* @non-surge-end */
             }
             if (isNode) {
+                /* @non-surge-start */
                 return this.root[key];
+                /* @non-surge-end */
             }
             if (isGUIforCores) {
+                /* @non-surge-start */
                 return $Plugins.SubStoreCache.get(key);
+                /* @non-surge-end */
             }
         } else {
             return this.cache[key];
@@ -257,13 +299,19 @@ export class OpenAPI {
                 return $persistentStore.write(null, key);
             }
             if (isQX) {
+                /* @non-surge-start */
                 return $prefs.removeValueForKey(key);
+                /* @non-surge-end */
             }
             if (isNode) {
+                /* @non-surge-start */
                 delete this.root[key];
+                /* @non-surge-end */
             }
             if (isGUIforCores) {
+                /* @non-surge-start */
                 return $Plugins.SubStoreCache.remove(key);
+                /* @non-surge-end */
             }
         } else {
             delete this.cache[key];
@@ -276,7 +324,11 @@ export class OpenAPI {
         const openURL = options['open-url'];
         const mediaURL = options['media-url'];
 
-        if (isQX) $notify(title, subtitle, content, options);
+        if (isQX) {
+            /* @non-surge-start */
+            $notify(title, subtitle, content, options);
+            /* @non-surge-end */
+        }
         if (isSurge || isEgern) {
             $notification.post(
                 title,
@@ -288,6 +340,7 @@ export class OpenAPI {
             );
         }
         if (isLoon) {
+            /* @non-surge-start */
             let opts = {};
             if (openURL) opts['openUrl'] = openURL;
             if (mediaURL) opts['mediaUrl'] = mediaURL;
@@ -296,8 +349,10 @@ export class OpenAPI {
             } else {
                 $notification.post(title, subtitle, content, opts);
             }
+            /* @non-surge-end */
         }
         if (isNode) {
+            /* @non-surge-start */
             const content_ =
                 content +
                 (openURL ? `\n点击跳转: ${openURL}` : '') +
@@ -354,9 +409,12 @@ export class OpenAPI {
                         );
                 }
             }
+            /* @non-surge-end */
         }
         if (isGUIforCores) {
+            /* @non-surge-start */
             $Plugins.Notify(title, subtitle + '\n' + content);
+            /* @non-surge-end */
         }
     }
 
@@ -385,11 +443,13 @@ export class OpenAPI {
         if (isQX || isLoon || isSurge || isGUIforCores || isEgern) {
             $done(value);
         } else if (isNode) {
+            /* @non-surge-start */
             if (typeof $context !== 'undefined') {
                 $context.headers = value.headers;
                 $context.statusCode = value.statusCode;
                 $context.body = value.body;
             }
+            /* @non-surge-end */
         }
     }
 }
@@ -494,6 +554,7 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
 
         let worker;
         if (isQX) {
+            /* @non-surge-start */
             worker = $task.fetch({
                 method,
                 url: options.url,
@@ -501,6 +562,7 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
                 body: options.body,
                 opts: options.opts,
             });
+            /* @non-surge-end */
         } else if (isLoon || isSurge || isNode || isEgern) {
             worker = new Promise((resolve, reject) => {
                 const body = options.body;
@@ -509,6 +571,7 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
                 opts.body = body;
                 opts.timeout = Number(opts.timeout) || 8000;
                 if (isNode) {
+                    /* @non-surge-start */
                     const undici = eval("require('undici')");
                     const { socksDispatcher } = eval("require('fetch-socks')");
                     const defaultMaxHeaderSize = 32 * 1024;
@@ -630,6 +693,7 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
                     } catch (e) {
                         reject(e);
                     }
+                    /* @non-surge-end */
                 } else {
                     if (isSurge || isEgern || isStash || isShadowRocket) {
                         opts.timeout = Math.ceil(opts.timeout / 1000);
@@ -677,6 +741,7 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
                 }
             });
         } else if (isGUIforCores) {
+            /* @non-surge-start */
             worker = new Promise(async (resolve, reject) => {
                 try {
                     const response = await $Plugins.Requests({
@@ -702,6 +767,7 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
                     reject(error);
                 }
             });
+            /* @non-surge-end */
         }
 
         return new Promise((resolve, reject) => {

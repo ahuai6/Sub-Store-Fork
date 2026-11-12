@@ -46,6 +46,9 @@ need('backend/src/restful/download.js', "'download-sub'");
 need('backend/src/restful/node-info.js', "'node-info'");
 need('backend/src/utils/script-resource-cache.js', 'flush()');
 need('backend/src/vendor/express.js', 'scriptResourceCache.flush');
+need('backend/src/runtime/build-flags.js', '__SURGE_ONLY__');
+need('backend/bundle-esbuild.js', 'surgeOnly: true');
+need('backend/surge-only-strip.js', '@non-surge-start');
 need('scripts/check/geo.js', 'time_budget');
 need(
     '.github/scripts/publish_public_dist.sh',

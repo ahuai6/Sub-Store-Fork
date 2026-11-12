@@ -162,11 +162,13 @@ function isLocalHttpOrigin(origin) {
 }
 
 function readNodeEnv(name) {
+    /* @non-surge-start */
     try {
         return eval('process.env')[name];
     } catch {
         return undefined;
     }
+    /* @non-surge-end */
 }
 
 function readScriptArgument() {

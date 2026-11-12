@@ -176,7 +176,9 @@ export default async function download(
     const cacheThreshold = defaultCacheThreshold || 1024;
     let proxy = customProxy || defaultProxy;
     if ($.env.isNode) {
+        /* @non-surge-start */
         proxy = proxy || eval('process.env.SUB_STORE_BACKEND_DEFAULT_PROXY');
+        /* @non-surge-end */
     }
     const userAgent = ua || defaultUserAgent || 'clash.meta/v1.19.23';
     let customHeaders;
@@ -328,6 +330,7 @@ export default async function download(
             throw new Error(`无法加载 ${type}: ${url}`);
         }
     } else if (url?.startsWith('/')) {
+        /* @non-surge-start */
         try {
             const fs = getFs();
             return formatPlainDownloadResult(
@@ -342,6 +345,7 @@ export default async function download(
             );
             throw new Error(`无法从该路径读取文本内容: ${url}`);
         }
+        /* @non-surge-end */
     }
 
     if (!isNode && tasks.has(id)) {
@@ -519,6 +523,7 @@ export default async function download(
 }
 
 export async function downloadFile(url, file) {
+    /* @non-surge-start */
     const undici = eval("require('undici')");
     const fs = getFs();
     const { pipeline } = getStreamPromises();
@@ -538,4 +543,5 @@ export async function downloadFile(url, file) {
     await pipeline(body, fileStream);
     $.info(`File downloaded from ${url} to ${file}`);
     return file;
+    /* @non-surge-end */
 }

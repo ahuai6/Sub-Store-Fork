@@ -42,18 +42,23 @@ try {
         meta.env = $environment;
     }
     if (typeof $loon !== 'undefined') {
+        /* @non-surge-start */
         // eslint-disable-next-line no-undef
         meta.loon = $loon;
+        /* @non-surge-end */
     }
     if (typeof $script !== 'undefined') {
         // eslint-disable-next-line no-undef
         meta.script = $script;
     }
     if (typeof $Plugin !== 'undefined') {
+        /* @non-surge-start */
         // eslint-disable-next-line no-undef
         meta.plugin = $Plugin;
+        /* @non-surge-end */
     }
     if (isNode) {
+        /* @non-surge-start */
         meta.node = {
             version: eval('process.version'),
             argv: eval('process.argv'),
@@ -67,6 +72,7 @@ try {
                 meta.node.env[key] = env[key];
             }
         }
+        /* @non-surge-end */
     }
     // eslint-disable-next-line no-empty
 } catch (e) {}
