@@ -19,6 +19,7 @@ import {
 import { normalizeClashYaml } from '@/core/proxy-utils/preprocessors';
 import { maskAgeSecretInUrl } from '@/utils/age';
 import { isMihomoConfigFile, normalizeFileConfig } from '@/utils/file-type';
+import { heavyRequestKey, shareResponse } from '@/utils/inflight';
 
 function formatAgeSafeUrls(errors) {
     return Object.keys(errors).map(maskAgeSecretInUrl).join(', ');
@@ -31,6 +32,15 @@ export default function register($app) {
 }
 
 async function previewFile(req, res) {
+    if (req.__forkHeavy !== 'preview-file') {
+        req.__forkHeavy = 'preview-file';
+        return shareResponse(
+            heavyRequestKey('preview-file', req),
+            res,
+            () => previewFile(req, res),
+            'preview-file',
+        );
+    }
     try {
         const file = normalizeFileConfig(req.body);
         let content = '';
@@ -77,6 +87,15 @@ async function previewFile(req, res) {
 }
 
 async function compareSub(req, res) {
+    if (req.__forkHeavy !== 'preview-sub') {
+        req.__forkHeavy = 'preview-sub';
+        return shareResponse(
+            heavyRequestKey('preview-sub', req),
+            res,
+            () => compareSub(req, res),
+            'preview-sub',
+        );
+    }
     const sub = req.body;
     const mode = resolveIgnoreFailedRemoteSubMode(sub.ignoreFailedRemoteSub);
 
@@ -209,6 +228,15 @@ async function compareSub(req, res) {
 }
 
 async function compareCollection(req, res) {
+    if (req.__forkHeavy !== 'preview-collection') {
+        req.__forkHeavy = 'preview-collection';
+        return shareResponse(
+            heavyRequestKey('preview-collection', req),
+            res,
+            () => compareCollection(req, res),
+            'preview-collection',
+        );
+    }
     const collection = req.body;
     const collectionMode = resolveIgnoreFailedRemoteSubMode(
         collection.ignoreFailedRemoteSub,
