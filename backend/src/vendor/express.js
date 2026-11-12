@@ -7,6 +7,9 @@ import {
     NODE_CORS_ALLOWED_ORIGINS_ENV,
     resolveRuntimeCorsPolicy,
 } from '@/utils/cors';
+import scriptResourceCache, {
+    bindScriptCacheFlush,
+} from '@/utils/script-resource-cache';
 
 export default function express({ substore: $, port, host }) {
     const { isNode } = ENV();
@@ -71,6 +74,10 @@ export default function express({ substore: $, port, host }) {
                 }
             };
 
+            next();
+        });
+        app.use((req, res, next) => {
+            bindScriptCacheFlush(res);
             next();
         });
         app.use((req, res, next) => {
@@ -271,6 +278,11 @@ export default function express({ substore: $, port, host }) {
             }
 
             send(body = '') {
+                try {
+                    scriptResourceCache.flush();
+                } catch (e) {
+                    // The response still has to be delivered.
+                }
                 const response = {
                     status: isQX ? STATUS_CODE_MAP[statusCode] : statusCode,
                     body,

@@ -53,7 +53,9 @@ jobs:
           fetch-depth: 0
 
       - name: Check fork frontend customizations
-        run: node .github/scripts/apply-fork-frontend.mjs --check
+        run: |
+          node .github/scripts/apply-fork-frontend.mjs --check
+          node .github/scripts/apply-fork-runtime.mjs --check
 
       - name: Set up Node.js
         uses: actions/setup-node@v6

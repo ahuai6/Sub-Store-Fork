@@ -114,6 +114,11 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if ! node .github/scripts/apply-fork-runtime.mjs --check >> /tmp/fork-patch.txt 2>&1; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           cat /tmp/fork-patch.txt
           echo "ok=true" >> "$GITHUB_OUTPUT"
           if git diff --quiet -- backend/src/restful/miscs.js backend/src/utils/cors.js; then
@@ -136,7 +141,7 @@ jobs:
           {
             echo "Automatic merge of \`sub-store-org/Sub-Store\` \`master\` into \`main\` was clean, but the fork frontend patch no longer matches. \`main\` was not pushed. Nothing was force-pushed."
             echo
-            echo "\`node .github/scripts/apply-fork-frontend.mjs\` failed:"
+            echo "\`node .github/scripts/apply-fork-frontend.mjs\` or \`node .github/scripts/apply-fork-runtime.mjs --check\` failed:"
             echo
             echo '```'
             cat /tmp/fork-patch.txt
