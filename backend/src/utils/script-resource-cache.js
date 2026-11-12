@@ -5,8 +5,20 @@ import {
     SETTINGS_KEY,
 } from '@/constants';
 
+// Coalesce the per-node JSON rewrite of #sub-store-cached-script-resource.
+// get/set semantics stay on the in-memory object. The persistent store is
+// updated every BATCH sets, on a short quiet period, and when the request
+// ends. Entries still expire with settings.scriptCacheTtl (default 48h).
+// revokeAll, used by the clear-cache action, writes immediately.
+const BATCH = 25;
+const DEBOUNCE_MS = 200;
+
 class ResourceCache {
     constructor() {
+        this._dirty = false;
+        this._timer = null;
+        this._writesSinceFlush = 0;
+        this._flushing = false;
         if (!$.read(SCRIPT_RESOURCE_CACHE_KEY)) {
             $.write('{}', SCRIPT_RESOURCE_CACHE_KEY);
         }
@@ -24,6 +36,13 @@ class ResourceCache {
         this._cleanup();
     }
 
+    _clearTimer() {
+        if (this._timer != null && typeof clearTimeout === 'function') {
+            clearTimeout(this._timer);
+        }
+        this._timer = null;
+    }
+
     _cleanup(prefix, ttl) {
         const resolvedTTL = normalizeTTL(ttl) ?? 0;
         let clear = false;
@@ -37,16 +56,58 @@ class ResourceCache {
                 clear = true;
             }
         });
-        if (clear) this._persist();
+        if (clear) this._writeThrough();
     }
 
     revokeAll() {
         this.resourceCache = {};
-        this._persist();
+        this._writeThrough();
     }
 
     _persist() {
         $.write(JSON.stringify(this.resourceCache), SCRIPT_RESOURCE_CACHE_KEY);
+    }
+
+    _writeThrough() {
+        this._clearTimer();
+        this._dirty = false;
+        this._writesSinceFlush = 0;
+        this._persist();
+    }
+
+    _schedule() {
+        this._dirty = true;
+        this._writesSinceFlush += 1;
+        if (this._writesSinceFlush >= BATCH) {
+            this.flush();
+            return;
+        }
+        if (this._timer != null) return;
+        if (typeof setTimeout !== 'function') {
+            this.flush();
+            return;
+        }
+        this._timer = setTimeout(() => {
+            this._timer = null;
+            this.flush();
+        }, DEBOUNCE_MS);
+        if (this._timer && typeof this._timer.unref === 'function') {
+            this._timer.unref();
+        }
+    }
+
+    flush() {
+        if (this._flushing) return;
+        this._flushing = true;
+        try {
+            this._clearTimer();
+            this._writesSinceFlush = 0;
+            if (!this._dirty) return;
+            this._dirty = false;
+            this._persist();
+        } finally {
+            this._flushing = false;
+        }
     }
 
     gettime(id) {
@@ -65,7 +126,7 @@ class ResourceCache {
             if (Date.now() + resolvedTTL <= time) return cached.data;
             if (remove) {
                 delete this.resourceCache[id];
-                this._persist();
+                this._writeThrough();
             }
         }
         return null;
@@ -77,7 +138,7 @@ class ResourceCache {
             time: Date.now() + resolvedTTL,
             data: value,
         };
-        this._persist();
+        this._schedule();
     }
 }
 
@@ -100,4 +161,46 @@ function getTTL() {
     return DEFAULT_SCRIPT_CACHE_TTL;
 }
 
-export default new ResourceCache();
+const cache = new ResourceCache();
+
+function wrapDone(fn) {
+    if (typeof fn !== 'function' || fn.__scriptCacheFlush) return fn;
+    const wrapped = function (...args) {
+        try {
+            cache.flush();
+        } catch (e) {
+            $.error(e?.message ?? e);
+        }
+        return fn.apply(this, args);
+    };
+    wrapped.__scriptCacheFlush = true;
+    return wrapped;
+}
+
+if (typeof $.done === 'function') {
+    $.done = wrapDone($.done.bind($));
+}
+
+try {
+    if (typeof globalThis.$done === 'function') {
+        globalThis.$done = wrapDone(globalThis.$done);
+    }
+} catch (e) {
+    // Some hosts freeze $done. Response.send still flushes before calling it.
+}
+
+export function bindScriptCacheFlush(res) {
+    if (!res || typeof res.on !== 'function' || res.__scriptCacheFlush) return;
+    res.__scriptCacheFlush = true;
+    const flush = () => {
+        try {
+            cache.flush();
+        } catch (e) {
+            $.error(e?.message ?? e);
+        }
+    };
+    res.on('finish', flush);
+    res.on('close', flush);
+}
+
+export default cache;

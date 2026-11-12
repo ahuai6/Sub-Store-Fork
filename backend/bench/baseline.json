@@ -1,0 +1,76 @@
+{
+  "recordedAt": "2026-11-12T22:12:53.749Z",
+  "node": "v22.23.4",
+  "platform": "linux x64 Intel(R) Xeon(R) Processor",
+  "note": "V8 JIT timings. Not an on-device Surge measurement. Peggy is reloaded per sample so the compiler cost is included. Bundle rows are null until pnpm bundle:esbuild has been run.",
+  "metrics": {
+    "getFlag5000": {
+      "medianMs": 238.39,
+      "minMs": 237.54,
+      "maxMs": 239.11,
+      "runs": 3
+    },
+    "peggySurgePerRequest": {
+      "medianMs": 43.07,
+      "minMs": 41.78,
+      "maxMs": 60.14,
+      "runs": 3
+    },
+    "peggyLoonPerRequest": {
+      "medianMs": 25.44,
+      "minMs": 22.81,
+      "maxMs": 32.45,
+      "runs": 3
+    },
+    "peggyQxPerRequest": {
+      "medianMs": 17.94,
+      "minMs": 16.58,
+      "maxMs": 19.24,
+      "runs": 3
+    },
+    "produceClash5000": {
+      "medianMs": 13.21,
+      "minMs": 12.56,
+      "maxMs": 16.46,
+      "runs": 3
+    },
+    "produceSurge5000": {
+      "medianMs": 14.68,
+      "minMs": 13.56,
+      "maxMs": 14.78,
+      "runs": 3
+    },
+    "produceSingBox5000": {
+      "medianMs": 10.12,
+      "minMs": 10.01,
+      "maxMs": 14.26,
+      "runs": 3
+    },
+    "coldCompileSubStore0": {
+      "medianMs": 1.78,
+      "minMs": 1.73,
+      "maxMs": 24.61,
+      "runs": 3
+    },
+    "coldCompileSubStore1": {
+      "medianMs": 1.72,
+      "minMs": 1.69,
+      "maxMs": 23.41,
+      "runs": 3
+    },
+    "coldEvalSubStore0": {
+      "medianMs": 10.03,
+      "minMs": 8.83,
+      "maxMs": 32.6,
+      "runs": 3,
+      "status": 200
+    },
+    "coldEvalSubStore1": {
+      "medianMs": 11.16,
+      "minMs": 8.88,
+      "maxMs": 32.41,
+      "runs": 3,
+      "status": 404
+    }
+  }
+}

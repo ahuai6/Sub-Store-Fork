@@ -1,0 +1,7 @@
+ss://YWVzLTEyOC1nY206c2VjcmV0@ss.example.com:8388#SS%20HK
+vmess://eyJ2IjoiMiIsInBzIjoiVk1lc3MiLCJhZGQiOiJ2bWVzcy5leGFtcGxlLmNvbSIsInBvcnQiOiI0NDMiLCJpZCI6IjEyMzQ1Njc4LTEyMzQtMTIzNC0xMjM0LTEyMzQ1Njc4OWFiYyIsImFpZCI6IjAiLCJuZXQiOiJ3cyIsInR5cGUiOiJub25lIiwiaG9zdCI6ImVkZ2UuZXhhbXBsZS5jb20iLCJwYXRoIjoiL3ZtZXNzIiwidGxzIjoidGxzIn0=
+vless://12345678-1234-1234-1234-123456789abc@vless.example.com:443?encryption=none&security=tls&sni=vless.example.com&type=ws&host=edge.example.com&path=%2Fvless#VLESS
+trojan://trojan-pass@trojan.example.com:443?security=tls&sni=trojan.example.com#Trojan
+hysteria2://hy2-pass@hy2.example.com:443?sni=hy2.example.com#Hysteria2
+socks://user:pass@socks.example.com:1080#SOCKS
+http://user:pass@http.example.com:8080#HTTP

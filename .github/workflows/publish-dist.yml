@@ -53,7 +53,9 @@ jobs:
           fetch-depth: 0
 
       - name: Check fork frontend customizations
-        run: node .github/scripts/apply-fork-frontend.mjs --check
+        run: |
+          node .github/scripts/apply-fork-frontend.mjs --check
+          node .github/scripts/apply-fork-runtime.mjs --check
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -76,6 +78,8 @@ jobs:
       - name: Test
         run: |
           cd backend
+          # src/test/proxy-producers/golden-snapshot.spec.js is part of this
+          # glob. Those snapshots must stay byte-identical.
           pnpm test
 
       - name: Bundle

@@ -2,12 +2,22 @@ import producer from '@/core/proxy-utils/producers';
 import { HTTP } from '@/vendor/open-api';
 import { failed, success } from '@/restful/response';
 import { NetworkError } from '@/restful/errors';
+import { heavyRequestKey, shareResponse } from '@/utils/inflight';
 
 export default function register($app) {
     $app.post('/api/utils/node-info', getNodeInfo);
 }
 
 async function getNodeInfo(req, res) {
+    if (req.__forkHeavy !== 'node-info') {
+        req.__forkHeavy = 'node-info';
+        return shareResponse(
+            heavyRequestKey('node-info', req),
+            res,
+            () => getNodeInfo(req, res),
+            'node-info',
+        );
+    }
     const proxy = req.body;
     const lang = req.query.lang || 'zh-CN';
     let shareUrl;
