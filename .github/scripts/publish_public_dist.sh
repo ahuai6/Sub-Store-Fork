@@ -70,6 +70,23 @@ do
   fi
 done
 
+# Fine-grained PATs are accepted by git as Basic x-access-token, not as a bearer header.
+TOKEN=$(printf '%s' "$TOKEN" | tr -d '[:space:]')
+TOKEN=${TOKEN#Bearer}
+TOKEN=${TOKEN#bearer}
+basic=$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')
+export GIT_TERMINAL_PROMPT=0
+export GH_TOKEN="$TOKEN"
+# actions/checkout@v6 keeps the job token in an included git config. A fresh
+# clone must not reuse that header, or git prompts for a username and fails
+# before the public repo is contacted.
+git_auth() {
+  git \
+    -c credential.helper= \
+    -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic}" \
+    "$@"
+}
+
 VERSION=$(tr -d '[:space:]' < "${DIST_DIR}/version.txt")
 SOURCE_SHA=$(tr -d '[:space:]' < "${DIST_DIR}/source-sha.txt")
 UPSTREAM_SHA=""
@@ -83,14 +100,10 @@ RELEASE_MODULE_URL="https://github.com/${REPO}/releases/latest/download/Surge-Be
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
-# Never print the token. Ask git to send it as a header instead of embedding it in the remote URL.
-export GIT_CONFIG_COUNT=1
-export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-export GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer ${TOKEN}"
-
 echo "Cloning ${REPO}"
-if ! git clone --depth 1 "https://github.com/${REPO}.git" "${workdir}/repo"; then
-  echo "::error title=Public dist repo is not reachable::Create a public repository ${REPO} (empty, default branch main) and grant PUBLIC_DIST_TOKEN contents write on that repo only. Do not make ${SOURCE_REPO} public."
+# Clone outside the source checkout so this command does not load that repo's credentials.
+if ! git_auth -C "${workdir}" clone --depth 1 "https://github.com/${REPO}.git" "${workdir}/repo"; then
+  echo "::error title=Could not clone ${REPO}::The public repo exists, but git rejected PUBLIC_DIST_TOKEN. Use a fine-grained PAT with Contents: Read and write on ${REPO} only, with no extra whitespace, and do not make ${SOURCE_REPO} public."
   exit 1
 fi
 
@@ -148,7 +161,7 @@ if git -C "${workdir}/repo" diff --cached --quiet; then
   echo "Module, LICENSE, and README are already current."
 else
   git -C "${workdir}/repo" commit -m "publish: Sub-Store ${VERSION} (${SHORT_SHA})"
-  git -C "${workdir}/repo" push origin "HEAD:${branch}"
+  git_auth -C "${workdir}/repo" push origin "HEAD:${branch}"
 fi
 
 notes=$(mktemp)
@@ -175,7 +188,6 @@ assets=(
   "${DIST_DIR}/Surge-Beta.sgmodule"
 )
 
-export GH_TOKEN="$TOKEN"
 if gh release view "$VERSION" --repo "$REPO" >/dev/null 2>&1; then
   gh release upload "$VERSION" --repo "$REPO" --clobber "${assets[@]}"
   gh release edit "$VERSION" --repo "$REPO" --notes-file "$notes"
