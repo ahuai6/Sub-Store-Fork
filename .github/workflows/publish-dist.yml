@@ -110,28 +110,11 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload build outputs
-        uses: actions/upload-artifact@v4
-        with:
-          name: public-dist
-          path: public-dist
-          if-no-files-found: error
-
-  publish:
-    needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Download build outputs
-        uses: actions/download-artifact@v4
-        with:
-          name: public-dist
-          path: public-dist
-
+      # Publish from this job's workspace. Actions artifact storage on this
+      # account is already at its quota, so the bundles are not uploaded as
+      # workflow artifacts.
       - name: Publish to the public artifact repo
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           PUBLIC_DIST_TOKEN: ${{ secrets.PUBLIC_DIST_TOKEN }}
           PUBLIC_DIST_REPO: ${{ env.PUBLIC_DIST_REPO }}
