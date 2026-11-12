@@ -7,9 +7,11 @@ scope/start_url `/`. This repo's Pages site is a project site:
     https://ahuai6.github.io/Sub-Store-Fork-Dist/
 
 Asset URLs, the PWA scope, and the Vue Router history base have to live
-under that subpath. The script patches a checkout of
-sub-store-org/Sub-Store-Front-End (it does not vendor the frontend) and
-checks the built files before they are pushed.
+under that subpath. A few application checks also assume the site is mounted
+at `/`. The script patches a checkout of sub-store-org/Sub-Store-Front-End
+(it does not vendor the frontend) and checks the built files before they
+are pushed. Each source edit is anchored on the upstream text and the build
+fails if that anchor is gone.
 """
 
 from __future__ import annotations
@@ -25,6 +27,68 @@ BASE = "/Sub-Store-Fork-Dist/"
 API = "https://sub.store"
 PAGES_URL = "https://ahuai6.github.io/Sub-Store-Fork-Dist/"
 UPSTREAM_REPO = "sub-store-org/Sub-Store-Front-End"
+# Bump when a source patch changes behavior. publish-frontend compares this
+# with gh-pages frontend-version.txt and rebuilds even if the upstream sha,
+# base, and API URL are unchanged.
+PATCH_STAMP = "subpath-routes-1"
+
+# subs.ts decides whether to load traffic/expiry by comparing the browser
+# pathname to the router path. Under a project-site base that pathname is
+# /Sub-Store-Fork-Dist/subs, so the check never passes and the row stays
+# on "加载中".
+FLOW_PAGE_ANCHOR = (
+    "const canFetchFlowsForCurrentPage = () => "
+    "window.location.pathname === '/subs';"
+)
+FLOW_PAGE_REPLACEMENT = """const canFetchFlowsForCurrentPage = () => {
+  // Pages serves the app below Vite's base. Compare the route, not the raw pathname.
+  const base = import.meta.env.BASE_URL.replace(/\\/$/, '');
+  const pathname = window.location.pathname.replace(/\\/$/, '') || '/';
+  const routePath = base && (pathname === base || pathname.startsWith(`${base}/`))
+    ? pathname.slice(base.length) || '/'
+    : pathname;
+  return routePath === '/subs';
+};"""
+FLOW_PAGE_MARKER = "pathname.slice(base.length)"
+
+# These are real <a href> navigations. router.push('/aboutUs') is already
+# base-aware; a root-absolute href leaves the project site.
+ABOUT_LINK_ANCHOR = """            <a
+              href="/aboutUs"
+              style="color: var(--primary-color)"
+            >
+              {{ $t(`subPage.loadFailed.about`) }}
+            </a>"""
+ABOUT_LINK_REPLACEMENT = """            <router-link
+              to="/aboutUs"
+              style="color: var(--primary-color)"
+            >
+              {{ $t(`subPage.loadFailed.about`) }}
+            </router-link>"""
+
+# Copying an API link builds a URL back to this frontend. new URL(origin)
+# drops the project-site path.
+COPY_API_LINK_ANCHOR = (
+    "  const url = new URL(window.location.origin);\n"
+    "  url.searchParams.set('api', api.url);"
+)
+COPY_API_LINK_REPLACEMENT = (
+    "  const url = new URL(import.meta.env.BASE_URL, window.location.origin);\n"
+    "  url.searchParams.set('api', api.url);"
+)
+COPY_API_LINK_MARKER = "new URL(import.meta.env.BASE_URL, window.location.origin)"
+
+# Terser turns `pathname === '/subs'` into `"/subs"===window.location.pathname`.
+# Either order is the unpatched guard. A base-stripped comparison does not
+# put location.pathname on either side of that literal.
+_ROOT_ROUTE = r"""/(?:subs|files|sync|shares|aboutUs|my)"""
+_LOCATION_PATHNAME = r"""(?:window\.)?location\.pathname"""
+ROOT_PATHNAME_EQ = re.compile(
+    rf"""{_LOCATION_PATHNAME}\s*={{2,3}}\s*(['"`]){_ROOT_ROUTE}\1"""
+    rf"""|(['"`]){_ROOT_ROUTE}\2\s*={{2,3}}\s*{_LOCATION_PATHNAME}\b"""
+)
+ROOT_ABOUT_HREF = re.compile(r"""href\s*[:=]\s*(['"`])/aboutUs\1""")
+ORIGIN_ONLY_URL = re.compile(r"""new URL\(\s*(?:window\.)?location\.origin\s*\)""")
 
 
 def normalize_base(base: str) -> str:
@@ -36,6 +100,112 @@ def normalize_base(base: str) -> str:
     if value == "/":
         raise SystemExit("refusing to build the frontend with base /")
     return value
+
+
+def _replace_once(path: Path, anchor: str, replacement: str, marker: str) -> None:
+    text = path.read_text()
+    has_anchor = anchor in text
+    has_marker = marker in text
+    if has_marker and not has_anchor:
+        return
+    if not has_anchor:
+        raise SystemExit(
+            f"{path} is missing the patch anchor, so the Pages subpath fix was not applied:\n{anchor}"
+        )
+    count = text.count(anchor)
+    if count != 1 or has_marker:
+        raise SystemExit(f"{path} has {count} copies of the patch anchor; expected exactly one")
+    path.write_text(text.replace(anchor, replacement, 1))
+
+
+def patch_subpath_routes(frontend: Path) -> None:
+    """Rewrite application paths that break when Vite base is not `/`."""
+    _replace_once(
+        frontend / "src/store/subs.ts",
+        FLOW_PAGE_ANCHOR,
+        FLOW_PAGE_REPLACEMENT,
+        FLOW_PAGE_MARKER,
+    )
+
+    about_old = 0
+    about_new = 0
+    vue_files = sorted((frontend / "src").rglob("*.vue"))
+    if not vue_files:
+        raise SystemExit(f"{frontend / 'src'} has no Vue files to patch")
+    for path in vue_files:
+        text = path.read_text()
+        old_count = text.count(ABOUT_LINK_ANCHOR)
+        about_old += old_count
+        about_new += text.count(ABOUT_LINK_REPLACEMENT)
+        if old_count:
+            path.write_text(text.replace(ABOUT_LINK_ANCHOR, ABOUT_LINK_REPLACEMENT))
+    if about_old == 0 and about_new == 0:
+        raise SystemExit(
+            "src/**/*.vue is missing the href=\"/aboutUs\" anchor, "
+            "so those links were not rewritten for the Pages base"
+        )
+
+    copy_old = 0
+    copy_new = 0
+    for path in (frontend / "src").rglob("*.vue"):
+        text = path.read_text()
+        old_count = text.count(COPY_API_LINK_ANCHOR)
+        copy_old += old_count
+        copy_new += text.count(COPY_API_LINK_MARKER)
+        if old_count:
+            if old_count != 1:
+                raise SystemExit(f"{path} has {old_count} API copy-link anchors; expected one")
+            path.write_text(text.replace(COPY_API_LINK_ANCHOR, COPY_API_LINK_REPLACEMENT, 1))
+    if copy_old == 0 and copy_new == 0:
+        raise SystemExit(
+            "src is missing the `new URL(window.location.origin)` API copy-link anchor, "
+            "so shared frontend links were not rewritten for the Pages base"
+        )
+    if copy_old > 1:
+        raise SystemExit(f"expected one API copy-link anchor, found {copy_old}")
+
+
+def assert_source_paths(frontend: Path, base: str) -> None:
+    """Fail if a root-path assumption is still in the patched checkout."""
+    base = normalize_base(base)
+    problems: list[str] = []
+    href_re = re.compile(r"""href\s*=\s*(['"])(/[^'"]*)\1""")
+    src_re = re.compile(r"""\ssrc\s*=\s*(['"])(/[^'"]*)\1""")
+    pathname_re = re.compile(
+        r"""(?:window\.)?location\.pathname\s*={2,3}\s*['"]/"""
+    )
+    origin_url_re = re.compile(r"""new URL\(\s*window\.location\.origin\s*\)""")
+
+    source_files = [frontend / "index.html", *(frontend / "src").rglob("*")]
+    for path in source_files:
+        if not path.is_file() or path.suffix not in {".vue", ".ts", ".js", ".html"}:
+            continue
+        text = path.read_text(errors="ignore")
+        relative = path.relative_to(frontend)
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for match in href_re.finditer(line):
+                url = match.group(2)
+                if url.startswith(base) or url.startswith("//"):
+                    continue
+                problems.append(f"{relative}:{lineno}: root href {url}")
+            if path.name == "index.html":
+                for match in src_re.finditer(line):
+                    url = match.group(2)
+                    if url.startswith("/src/") or url.startswith(base):
+                        continue
+                    problems.append(f"{relative}:{lineno}: root src {url}")
+        for match in pathname_re.finditer(text):
+            problems.append(f"{relative}: location.pathname compared to a root path ({match.group(0)})")
+        for match in origin_url_re.finditer(text):
+            problems.append(f"{relative}: {match.group(0)} drops the Pages base")
+
+    subs = (frontend / "src/store/subs.ts").read_text()
+    if FLOW_PAGE_MARKER not in subs or "import.meta.env.BASE_URL" not in subs:
+        problems.append("src/store/subs.ts flow check does not strip BASE_URL")
+    if problems:
+        raise SystemExit(
+            "frontend source still assumes it is served from /:\n" + "\n".join(problems)
+        )
 
 
 def patch_checkout(frontend: Path, base: str, api: str) -> None:
@@ -101,14 +271,19 @@ def patch_checkout(frontend: Path, base: str, api: str) -> None:
     # Leave src="/src/..." so Vite still compiles the entry. Root-absolute
     # hrefs are copied through unchanged when base is not `/`.
     base_body = re.escape(base.lstrip("/"))
-    html_next, href_count = re.subn(
-        rf'href="/(?!{base_body})',
-        f'href="{base}',
-        html,
-    )
-    if href_count < 1 and 'href="/' in html:
-        raise SystemExit(f"{index_path} root-absolute hrefs were not rewritten")
-    index_path.write_text(html_next)
+    unprefixed = re.findall(rf'href="/(?!{base_body})', html)
+    if unprefixed:
+        html_next, href_count = re.subn(
+            rf'href="/(?!{base_body})',
+            f'href="{base}',
+            html,
+        )
+        if href_count != len(unprefixed):
+            raise SystemExit(f"{index_path} root-absolute hrefs were not rewritten")
+        html = html_next
+    elif 'href="/' not in html:
+        raise SystemExit(f"{index_path} has no root-absolute hrefs")
+    index_path.write_text(html)
 
     manifest_path = frontend / "public" / "manifests.json"
     manifest = json.loads(manifest_path.read_text())
@@ -117,7 +292,10 @@ def patch_checkout(frontend: Path, base: str, api: str) -> None:
             raise SystemExit(f"{manifest_path} has no {key}")
         manifest[key] = base
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    print(f"patched {frontend} base={base} api={api}", file=sys.stderr)
+
+    patch_subpath_routes(frontend)
+    assert_source_paths(frontend, base)
+    print(f"patched {frontend} base={base} api={api} patches={PATCH_STAMP}", file=sys.stderr)
 
 
 def _load_json(path: Path) -> dict:
@@ -187,10 +365,55 @@ def check_dist(dist: Path, base: str, api: str) -> None:
         raise SystemExit(f"built JS does not contain the base path {base}")
     if api not in bundled:
         raise SystemExit(f"built JS does not contain {api}")
+    assert_built_paths(dist)
+    version_path = dist / "frontend-version.txt"
+    if version_path.is_file():
+        version_text = version_path.read_text().splitlines()
+        if f"patches={PATCH_STAMP}" not in version_text:
+            raise SystemExit(
+                f"{version_path} is missing patches={PATCH_STAMP}, "
+                "so an unchanged upstream sha would skip this rebuild"
+            )
     print(
         f"ok: {index_path} assets, PWA scope, and {api} are under {base}",
         file=sys.stderr,
     )
+
+
+def assert_built_paths(dist: Path) -> None:
+    """Reject built assets that still treat a root route as the whole pathname.
+
+    Terser emits either `pathname==="/subs"` or `"/subs"===location.pathname`.
+    The patched guard compares a base-stripped route, so either literal means
+    this bug survived the build.
+    """
+    problems: list[str] = []
+    files = [
+        path
+        for path in dist.rglob("*")
+        if path.is_file() and path.suffix in {".js", ".html", ".css", ".mjs"}
+        and not path.name.endswith(".gz")
+    ]
+    if not files:
+        raise SystemExit(f"{dist} has no JS or HTML to scan for root paths")
+    for path in files:
+        text = path.read_text(errors="ignore")
+        for regex, label in (
+            (ROOT_PATHNAME_EQ, "pathname compared with a root route"),
+            (ROOT_ABOUT_HREF, 'href="/aboutUs"'),
+            (ORIGIN_ONLY_URL, "new URL(location.origin) drops the Pages base"),
+        ):
+            match = regex.search(text)
+            if not match:
+                continue
+            start = max(0, match.start() - 60)
+            end = min(len(text), match.end() + 60)
+            snippet = text[start:end].replace("\n", " ")
+            problems.append(f"{path.relative_to(dist)}: {label}: {snippet}")
+    if problems:
+        raise SystemExit(
+            "built files still assume the app is served from /:\n" + "\n".join(problems)
+        )
 
 
 def write_version(path: Path, meta: dict[str, str]) -> None:
@@ -202,6 +425,7 @@ def write_version(path: Path, meta: dict[str, str]) -> None:
         "package",
         "base",
         "api",
+        "patches",
     )]
     path.write_text("\n".join(lines) + "\n")
 
@@ -232,7 +456,7 @@ This branch is the Sub-Store front end, built so GitHub Pages can serve it at <{
 
 The front end is GPL-3.0. Backend artifacts on the `main` branch of this repository are a separate Sub-Store build and stay under AGPL-3.0. This branch does not replace that license.
 
-The corresponding source of this build is the commit above. Application source was not modified. The build configuration applied on top of that commit is:
+The corresponding source of the upstream project is the commit above. This build also applies the patches in `.github/scripts/prepare_frontend_pages.py` from ahuai6/Sub-Store-Fork (patch stamp `{meta['patches']}`).
 
 1. Vite `base` / `VITE_PUBLIC_PATH` = `{meta['base']}`
 2. `VITE_API_URL` = `{meta['api']}` (upstream `.env.production` already uses this URL)
@@ -242,6 +466,9 @@ The corresponding source of this build is the commit above. Application source w
 6. Root-absolute `href` values in `index.html`, and `id` / `start_url` / `scope` in `public/manifests.json`, rewritten to `{meta['base']}`
 7. `404.html` is a copy of `index.html`, so GitHub Pages can boot the single-page app on client-side routes
 8. `.nojekyll` is present so Pages publishes every file
+9. `canFetchFlowsForCurrentPage` strips `import.meta.env.BASE_URL` from `window.location.pathname` before comparing it with `/subs`, so subscription traffic and expiry still load under the Pages subpath
+10. The load-failed `href="/aboutUs"` links are `router-link` targets, so Vue Router resolves them inside the history base
+11. The copied API link is `new URL(import.meta.env.BASE_URL, window.location.origin)`, so it opens this Pages site instead of the domain root
 
 Source commit: {source}
 """
@@ -282,6 +509,7 @@ def main() -> None:
     parser.add_argument("--patch", action="store_true")
     parser.add_argument("--check-dist", action="store_true")
     parser.add_argument("--finalize-site", action="store_true")
+    parser.add_argument("--print-patch-stamp", action="store_true")
     parser.add_argument("--sha", default="")
     parser.add_argument("--track", default="")
     parser.add_argument("--release-tag", default="")
@@ -289,6 +517,10 @@ def main() -> None:
     parser.add_argument("--package", default="")
     args = parser.parse_args()
 
+    if args.print_patch_stamp:
+        if not PATCH_STAMP or any(char in PATCH_STAMP for char in "=\n\r"):
+            raise SystemExit("PATCH_STAMP must be a single non-empty line without '='")
+        print(PATCH_STAMP)
     if args.patch:
         if args.frontend_dir is None:
             raise SystemExit("--patch requires --frontend-dir")
@@ -308,13 +540,14 @@ def main() -> None:
             "package": args.package,
             "base": normalize_base(args.base),
             "api": args.api,
+            "patches": PATCH_STAMP,
         }
         missing = [key for key, value in meta.items() if not value]
         if missing:
             raise SystemExit(f"--finalize-site missing {', '.join(missing)}")
         finalize_site(args.dist, args.frontend_dir, meta)
-    if not (args.patch or args.check_dist or args.finalize_site):
-        raise SystemExit("pass --patch, --check-dist, and/or --finalize-site")
+    if not (args.patch or args.check_dist or args.finalize_site or args.print_patch_stamp):
+        raise SystemExit("pass --patch, --check-dist, --finalize-site, and/or --print-patch-stamp")
 
 
 if __name__ == "__main__":
