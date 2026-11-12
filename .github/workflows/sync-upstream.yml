@@ -1,0 +1,166 @@
+name: sync-upstream
+
+# Fast-forward the pristine `upstream` branch to sub-store-org/Sub-Store master,
+# mirror new tags, and merge that into `main`. A conflict opens a PR. This
+# workflow never force-pushes.
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/sub-store-org/Sub-Store.git
+          git fetch upstream master --tags --prune --force
+
+      - name: Fast-forward upstream branch
+        run: |
+          set -euo pipefail
+          if ! git push --ff-only origin upstream/master:refs/heads/upstream; then
+            echo "::error::Refusing to force-update refs/heads/upstream. It must stay a fast-forward of sub-store-org/Sub-Store master."
+            exit 1
+          fi
+
+      - name: Mirror new upstream tags
+        run: |
+          set -euo pipefail
+          # Tags already on origin are left where they are, even if upstream moved them.
+          git ls-remote --tags origin | awk '{print $2}' | sed 's/\^{}$//' | sort -u > /tmp/origin-tags
+          refs=()
+          while read -r _sha ref; do
+            case "$ref" in
+              refs/tags/*\^\{\}) continue ;;
+              refs/tags/*) ;;
+              *) continue ;;
+            esac
+            if ! grep -Fxq "$ref" /tmp/origin-tags; then
+              refs+=("${ref}:${ref}")
+            fi
+          done < <(git ls-remote --tags upstream)
+          if [ ${#refs[@]} -eq 0 ]; then
+            echo "No new upstream tags."
+          else
+            echo "Pushing ${#refs[@]} new tag(s)."
+            git push origin "${refs[@]}"
+          fi
+
+      - name: Merge upstream into main
+        id: merge
+        run: |
+          set -euo pipefail
+          git checkout main
+          before=$(git rev-parse HEAD)
+          set +e
+          git merge --no-edit upstream/master
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            git diff --name-only --diff-filter=U > /tmp/conflict-files || true
+            git merge --abort || true
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "clean=true" >> "$GITHUB_OUTPUT"
+          echo "before=${before}" >> "$GITHUB_OUTPUT"
+          echo "after=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Push main
+        if: steps.merge.outputs.clean == 'true'
+        run: |
+          set -euo pipefail
+          git push origin main
+          if [ "${{ steps.merge.outputs.before }}" = "${{ steps.merge.outputs.after }}" ]; then
+            echo "changed=false" >> "$GITHUB_ENV"
+          else
+            echo "changed=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Close an open conflict PR after a clean merge
+        if: steps.merge.outputs.clean == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head sync/upstream --state open --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh pr close "$number" --repo "$GITHUB_REPOSITORY" --comment "Upstream merged into main cleanly, so this conflict PR is no longer needed."
+          fi
+
+      - name: Build when upstream bumps backend/package.json
+        if: steps.merge.outputs.clean == 'true' && env.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A push made with the default token does not start the push-triggered
+          # publish workflow, so dispatch it explicitly. That event is allowed
+          # to create a run. Upstream itself only releases when package.json changes.
+          if git diff --name-only "${{ steps.merge.outputs.before }}" "${{ steps.merge.outputs.after }}" | grep -qx 'backend/package.json'; then
+            gh workflow run publish-dist.yml --repo "$GITHUB_REPOSITORY" --ref main
+          else
+            echo "backend/package.json did not change. Not publishing a new build."
+          fi
+
+      - name: Open a PR when the merge conflicts
+        if: steps.merge.outputs.clean != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The PR head is upstream/master itself. Resolving happens on the PR.
+          # Do not force this branch if someone already pushed a resolution.
+          if ! git push origin upstream/master:refs/heads/sync/upstream; then
+            body="Could not update \`sync/upstream\` (it is not a fast-forward). Upstream commit: $(git rev-parse upstream/master). Conflicting files:"$'\n\n```\n'"$(cat /tmp/conflict-files)"$'\n```'
+            title="sync: upstream merge conflicts need attention"
+            existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title ${title}" --json number --jq '.[0].number')
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+            fi
+            exit 1
+          fi
+          {
+            echo "Automatic merge of \`sub-store-org/Sub-Store\` \`master\` into \`main\` hit conflicts. Nothing was force-pushed."
+            echo
+            echo "The \`upstream\` branch was fast-forwarded and is still a pristine copy of upstream \`master\`."
+            echo
+            echo "Conflicting files:"
+            echo
+            echo '```'
+            cat /tmp/conflict-files
+            echo '```'
+            echo
+            echo "Upstream commit: \`$(git rev-parse upstream/master)\`"
+            echo
+            echo "Resolve the conflicts on this PR. Do not force-push \`main\` or \`upstream\`."
+          } > /tmp/sync-pr-body.md
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head sync/upstream --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh pr comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/sync-pr-body.md
+            exit 0
+          fi
+          if ! gh pr create --repo "$GITHUB_REPOSITORY" --base main --head sync/upstream --title "sync: resolve upstream merge conflicts" --body-file /tmp/sync-pr-body.md; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "sync: resolve upstream merge conflicts" --body-file /tmp/sync-pr-body.md
+            exit 1
+          fi

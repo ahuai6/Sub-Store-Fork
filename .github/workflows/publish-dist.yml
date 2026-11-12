@@ -1,0 +1,121 @@
+name: publish-dist
+
+# Build the same backend bundles upstream attaches to a GitHub Release, then
+# publish them where Surge can fetch them. config/Surge-Beta.sgmodule in this
+# repo stays identical to upstream; the copy we publish only changes the
+# artifact URL prefix.
+#
+# Upstream's .github/workflows/main.yml is left untouched. It runs on `master`
+# and uploads to this repo's Releases, which are not public while the source
+# repo is private.
+on:
+  workflow_dispatch:
+    inputs:
+      public_repo:
+        description: Public artifact repository (owner/name)
+        default: ahuai6/Sub-Store-Fork-Dist
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - "config/Surge-Beta.sgmodule"
+      - ".github/workflows/publish-dist.yml"
+      - ".github/scripts/**"
+      - ".node-version"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "config/Surge-Beta.sgmodule"
+      - ".github/workflows/publish-dist.yml"
+      - ".github/scripts/**"
+      - ".node-version"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-dist-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PUBLIC_DIST_REPO: ${{ github.event.inputs.public_repo || 'ahuai6/Sub-Store-Fork-Dist' }}
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: ".node-version"
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          cd backend && pnpm i --frozen-lockfile
+
+      - name: Sync latest mihomo version
+        run: |
+          MIHOMO_VERSION="$(curl -fsSL https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt | tr -d '\r\n')"
+          test -n "$MIHOMO_VERSION"
+          echo "Using mihomo version: $MIHOMO_VERSION"
+          cd backend
+          MIHOMO_VERSION="$MIHOMO_VERSION" node ../.github/scripts/sync_mihomo_version.mjs
+
+      - name: Test
+        run: |
+          cd backend
+          pnpm test
+
+      - name: Bundle
+        run: |
+          cd backend
+          pnpm bundle:esbuild
+
+      - name: Render Surge beta module
+        run: |
+          set -euo pipefail
+          out="public-dist"
+          rm -rf "$out"
+          mkdir -p "$out"
+          python3 .github/scripts/render_surge_beta_module.py \
+            --check \
+            --public-repo "$PUBLIC_DIST_REPO" \
+            --output "$out/Surge-Beta.sgmodule" | tee "$out/module.diff"
+          cp backend/sub-store.min.js "$out/sub-store.min.js"
+          cp backend/dist/sub-store-0.min.js "$out/"
+          cp backend/dist/sub-store-1.min.js "$out/"
+          cp backend/dist/sub-store-parser.loon.min.js "$out/"
+          cp backend/dist/cron-sync-artifacts.min.js "$out/"
+          cp backend/dist/proxy-utils.esm.mjs "$out/"
+          cp backend/dist/sub-store.bundle.js "$out/"
+          cp backend/dist/runtime-manifest.json "$out/"
+          node --eval="process.stdout.write(require('./backend/package.json').version)" > "$out/version.txt"
+          git rev-parse HEAD > "$out/source-sha.txt"
+          git fetch origin upstream
+          git merge-base HEAD FETCH_HEAD > "$out/upstream-sha.txt"
+          {
+            echo "### Surge beta module diff vs upstream"
+            echo ""
+            echo '```diff'
+            cat "$out/module.diff"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Publish from this job's workspace. Actions artifact storage on this
+      # account is already at its quota, so the bundles are not uploaded as
+      # workflow artifacts.
+      - name: Publish to the public artifact repo
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          PUBLIC_DIST_TOKEN: ${{ secrets.PUBLIC_DIST_TOKEN }}
+          PUBLIC_DIST_REPO: ${{ env.PUBLIC_DIST_REPO }}
+        run: bash .github/scripts/publish_public_dist.sh public-dist
