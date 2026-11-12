@@ -7,6 +7,16 @@ const { build } = require('esbuild');
 const { stripNonSurgeRegions } = require('./surge-only-strip');
 
 const objectHasOwnPolyfill = require.resolve('core-js/actual/object/has-own');
+
+function precompilePeggy() {
+    // The runtime-manifest fixture symlinks src and copies this file, but not
+    // scripts/. Parsers in that src tree are already generated.
+    try {
+        require('./scripts/precompile-peggy').precompilePeggy();
+    } catch (error) {
+        if (!error || error.code !== 'MODULE_NOT_FOUND') throw error;
+    }
+}
 const builtinModuleNames = new Set(
     builtinModules.map((name) => name.replace(/^node:/, '')),
 );
@@ -138,12 +148,16 @@ const SURGE_BUNDLE_ABSENT = [
     '$prefs',
     'stash-version',
 ];
-const SURGE_BUNDLE_PRESENT = [
+// sub-store-0 no longer pulls ProxyUtils. Producers stay in sub-store-1.
+const SURGE_SIMPLE_PRESENT = [
     'policy-descriptor',
-    'sing-box',
     'lodash',
     '$httpClient',
     '$persistentStore',
+];
+const SURGE_CORE_PRESENT = [
+    ...SURGE_SIMPLE_PRESENT,
+    'sing-box',
     'vmess',
 ];
 
@@ -162,12 +176,14 @@ function assertBundleText(file, { absent = [], present = [] }) {
 }
 
 function assertSurgeOnlyBundles() {
-    for (const rel of ['dist/sub-store-0.min.js', 'dist/sub-store-1.min.js']) {
-        assertBundleText(path.join(__dirname, rel), {
-            absent: SURGE_BUNDLE_ABSENT,
-            present: SURGE_BUNDLE_PRESENT,
-        });
-    }
+    assertBundleText(path.join(__dirname, 'dist/sub-store-0.min.js'), {
+        absent: [...SURGE_BUNDLE_ABSENT, 'ProxyUtils'],
+        present: SURGE_SIMPLE_PRESENT,
+    });
+    assertBundleText(path.join(__dirname, 'dist/sub-store-1.min.js'), {
+        absent: SURGE_BUNDLE_ABSENT,
+        present: SURGE_CORE_PRESENT,
+    });
     assertBundleText(path.join(__dirname, 'sub-store.min.js'), {
         present: ['undici', 'dotenv', "eval('import(\"shoutrrr-ts\")')"],
     });
@@ -177,6 +193,7 @@ function assertSurgeOnlyBundles() {
 }
 
 !(async () => {
+    precompilePeggy();
     let version;
     try {
         version = JSON.parse(

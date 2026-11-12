@@ -260,13 +260,12 @@ const ISOFlags = {
     '🇨🇳': ['CN', 'CHN', 'BACK'],
 };
 // get proxy flag according to its name
-export function getFlag(name) {
-    // flags from @KOP-XIAO: https://github.com/KOP-XIAO/QuantumultX/blob/master/Scripts/resource-parser.js
-    // flags from @surgioproject: https://github.com/surgioproject/surgio/blob/master/lib/misc/flag_cn.ts
-
-    // refer: https://zh.wikipedia.org/wiki/ISO_3166-1二位字母代码
-    // refer: https://zh.wikipedia.org/wiki/ISO_3166-1三位字母代码
-    const Flags = {
+// flags from @KOP-XIAO: https://github.com/KOP-XIAO/QuantumultX/blob/master/Scripts/resource-parser.js
+// flags from @surgioproject: https://github.com/surgioproject/surgio/blob/master/lib/misc/flag_cn.ts
+// refer: https://zh.wikipedia.org/wiki/ISO_3166-1二位字母代码
+// refer: https://zh.wikipedia.org/wiki/ISO_3166-1三位字母代码
+// fork: getFlag matchers are compiled once
+const Flags = {
         '🏳️‍🌈': ['流量', '时间', '过期', 'Bandwidth', 'Expire'],
         '🇦🇸': ['美属萨摩亚'],
         '🇦🇴': ['安哥拉'],
@@ -723,47 +722,66 @@ export function getFlag(name) {
             '宁波',
             '镇江',
         ],
-    };
+};
 
-    // 原旗帜或空
-    let Flag =
-        name.match(/[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/)?.[0] ||
-        '🏴‍☠️';
-    //console.log(`oldFlag = ${Flag}`)
-    // 旗帜匹配
-    for (let flag of Object.keys(Flags)) {
+// Compiled once per realm. Pure function of the keyword tables above, so this
+// is not a TTL cache and clear-cache does not drop it.
+let flagMatchers;
+let isoMatchers;
+const regionalFlagPattern = /[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/;
+const neiMengGuPattern = /内蒙古/;
+const cn2Pattern = /(^|[^a-zA-Z])CN2([^a-zA-Z]|$)/;
+
+function compileFlagMatchers() {
+    if (flagMatchers) return;
+    flagMatchers = [];
+    for (const flag of Object.keys(Flags)) {
         const keywords = Flags[flag];
-        //console.log(`keywords = ${keywords}`)
-        if (
-            // 不精确匹配（只要包含就算,忽略大小写)
-            keywords.some((keyword) => RegExp(`${keyword}`, 'i').test(name))
-        ) {
-            if (/内蒙古/.test(name) && ['🇲🇳'].includes(flag)) {
-                return (Flag = '🇨🇳');
-            }
-            return (Flag = flag);
-        }
+        if (!keywords || keywords.length === 0) continue;
+        flagMatchers.push({
+            flag,
+            re: new RegExp(keywords.join('|'), 'i'),
+        });
     }
-    // ISO旗帜匹配
-    for (let flag of Object.keys(ISOFlags)) {
+    isoMatchers = [];
+    for (const flag of Object.keys(ISOFlags)) {
         const keywords = ISOFlags[flag];
-        //console.log(`keywords = ${keywords}`)
-        if (
-            // 精确匹配(两侧均有分割)
-            keywords.some((keyword) =>
-                RegExp(`(^|[^a-zA-Z])${keyword}([^a-zA-Z]|$)`).test(name),
-            )
-        ) {
-            const isCN2 =
-                flag == '🇨🇳' &&
-                RegExp(`(^|[^a-zA-Z])CN2([^a-zA-Z]|$)`).test(name);
+        if (!keywords || keywords.length === 0) continue;
+        isoMatchers.push({
+            flag,
+            re: new RegExp(
+                `(^|[^a-zA-Z])(?:${keywords.join('|')})([^a-zA-Z]|$)`,
+            ),
+        });
+    }
+}
+
+export function getFlagTables() {
+    return { flags: Flags, iso: ISOFlags };
+}
+
+export function getFlag(name) {
+    compileFlagMatchers();
+    // 原旗帜或空
+    let Flag = name.match(regionalFlagPattern)?.[0] || '🏴‍☠️';
+    for (let i = 0; i < flagMatchers.length; i++) {
+        const flag = flagMatchers[i].flag;
+        if (flagMatchers[i].re.test(name)) {
+            if (neiMengGuPattern.test(name) && ['🇲🇳'].includes(flag)) {
+                return '🇨🇳';
+            }
+            return flag;
+        }
+    }
+    for (let i = 0; i < isoMatchers.length; i++) {
+        const flag = isoMatchers[i].flag;
+        if (isoMatchers[i].re.test(name)) {
+            const isCN2 = flag == '🇨🇳' && cn2Pattern.test(name);
             if (!isCN2) {
-                return (Flag = flag);
+                return flag;
             }
         }
     }
-
-    //console.log(`Final Flag = ${Flag}`)
     return Flag;
 }
 

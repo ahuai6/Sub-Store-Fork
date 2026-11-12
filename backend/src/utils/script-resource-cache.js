@@ -4,6 +4,7 @@ import {
     DEFAULT_SCRIPT_CACHE_TTL,
     SETTINGS_KEY,
 } from '@/constants';
+import checkResultCache, { checkKey } from '@/utils/check-result-cache';
 
 // Coalesce the per-node JSON rewrite of #sub-store-cached-script-resource.
 // get/set semantics stay on the in-memory object. The persistent store is
@@ -62,6 +63,13 @@ class ResourceCache {
     revokeAll() {
         this.resourceCache = {};
         this._writeThrough();
+        // Clear-cache calls revokeAll. Shared network checks live in their
+        // own store and use scriptCacheTtl as well.
+        try {
+            checkResultCache.revokeAll();
+        } catch (e) {
+            $.error(e?.message ?? e);
+        }
     }
 
     _persist() {
@@ -162,6 +170,15 @@ function getTTL() {
 }
 
 const cache = new ResourceCache();
+
+// Additive helpers. Existing get/set/revokeAll behavior is unchanged aside
+// from revokeAll also dropping the shared check store.
+cache.sharedCheckGet = (identity) => checkResultCache.get(checkKey(identity));
+cache.sharedCheckSet = (identity, value) =>
+    checkResultCache.set(checkKey(identity), value);
+cache.sharedCheckClaim = (identity) => checkResultCache.claim(identity);
+cache.sharedCheck = (identity, producer) =>
+    checkResultCache.sharedCheck(identity, producer);
 
 function wrapDone(fn) {
     if (typeof fn !== 'function' || fn.__scriptCacheFlush) return fn;

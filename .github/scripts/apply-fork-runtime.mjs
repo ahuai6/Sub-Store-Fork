@@ -34,7 +34,46 @@ function need(rel, marker) {
     }
 }
 
+function forbid(rel, marker) {
+    const text = read(rel);
+    if (text && text.includes(marker)) {
+        failures.push(`${rel} still contains ${marker}`);
+    }
+}
+
 need('backend/package.json', '"bench"');
+need('backend/src/utils/geo.js', 'fork: getFlag matchers are compiled once');
+need('backend/src/vendor/open-api.js', 'fork: skip unchanged store writes');
+need(
+    'backend/src/core/proxy-utils/parsers/peggy/surge.js',
+    'fork: peggy parsers are precompiled',
+);
+need(
+    'backend/src/core/proxy-utils/parsers/peggy/loon.js',
+    'fork: peggy parsers are precompiled',
+);
+need(
+    'backend/src/core/proxy-utils/parsers/peggy/qx.js',
+    'fork: peggy parsers are precompiled',
+);
+need('backend/scripts/precompile-peggy.js', 'precompilePeggy');
+need('backend/bundle-esbuild.js', 'precompilePeggy');
+need(
+    'backend/src/products/sub-store-0.js',
+    'fork: sub-store-0 does not import ProxyUtils',
+);
+need('backend/src/products/sub-store-1.js', 'registerFileRoutes');
+forbid('backend/src/products/sub-store-0.js', 'registerFileRoutes');
+need(
+    '.github/scripts/render_surge_beta_module.py',
+    'share\\/file(?:\\/|\\?|#|$)',
+);
+forbid(
+    'backend/src/core/proxy-utils/parsers/peggy/surge.js',
+    'peggy.generate',
+);
+forbid('backend/src/core/proxy-utils/parsers/peggy/loon.js', 'peggy.generate');
+forbid('backend/src/core/proxy-utils/parsers/peggy/qx.js', 'peggy.generate');
 need('backend/scripts/bench.js', 'getFlag5000');
 need(
     'backend/src/test/proxy-producers/golden-snapshot.spec.js',
@@ -45,6 +84,16 @@ need('backend/src/restful/preview.js', "'preview-sub'");
 need('backend/src/restful/download.js', "'download-sub'");
 need('backend/src/restful/node-info.js', "'node-info'");
 need('backend/src/utils/script-resource-cache.js', 'flush()');
+need('backend/src/utils/output-cache.js', 'resourceCacheTtl');
+need('backend/src/utils/check-result-cache.js', 'scriptCacheTtl');
+need('backend/src/utils/script-resource-cache.js', 'sharedCheck');
+need('backend/src/restful/miscs.js', 'outputCache.revokeAll');
+need('backend/src/restful/miscs.js', 'checkResultCache.revokeAll');
+need('scripts/check/geo.js', 'sharedCheckGet');
+need('.github/scripts/render_surge_beta_module.py', 'prefetch_cron');
+need('backend/src/utils/prefetch-cron.js', 'prefetch_cron is empty');
+need('backend/src/products/cron-sync-artifacts.js', 'prefetchDecision');
+need('backend/scripts/bench.js', 'outputCacheHit5000');
 need('backend/src/vendor/express.js', 'scriptResourceCache.flush');
 need('backend/src/runtime/build-flags.js', '__SURGE_ONLY__');
 need('backend/bundle-esbuild.js', 'surgeOnly: true');

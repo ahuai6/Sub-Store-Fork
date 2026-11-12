@@ -15,6 +15,12 @@ export const ARTIFACT_REPOSITORY_KEY = 'Sub-Store Artifacts Repository';
 export const RESOURCE_CACHE_KEY = '#sub-store-cached-resource';
 export const HEADERS_RESOURCE_CACHE_KEY = '#sub-store-cached-headers-resource';
 export const SCRIPT_RESOURCE_CACHE_KEY = '#sub-store-cached-script-resource';
+// Produced subscription/collection bodies. Separate from the raw resource
+// cache so a 4 MB iOS value can be evicted on its own.
+export const OUTPUT_CACHE_KEY = '#sub-store-cached-output';
+// Network check results shared by script operators. Separate store so the
+// script-resource batching behavior stays the same.
+export const CHECK_RESULT_CACHE_KEY = '#sub-store-cached-check';
 export const LOGS_KEY = '#sub-store-logs';
 export const DEFAULT_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 export const DEFAULT_HEADERS_CACHE_TTL = 60 * 1000; // 1 min
