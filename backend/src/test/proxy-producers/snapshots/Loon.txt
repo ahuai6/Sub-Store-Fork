@@ -1,0 +1,7 @@
+SS HK=shadowsocks,ss.example.com,8388,aes-128-gcm,"secret",udp=true
+VMess=vmess,vmess.example.com,443,auto,"12345678-1234-1234-1234-123456789abc",transport=ws,path=/vmess,host=edge.example.com,over-tls=true,tls-name=edge.example.com,alterId=0,udp=true
+VLESS=vless,vless.example.com,443,"12345678-1234-1234-1234-123456789abc",transport=ws,path=/vless,host=edge.example.com,over-tls=true,skip-cert-verify=false,tls-name=vless.example.com,udp=true
+Trojan=trojan,trojan.example.com,443,"trojan-pass",tls-name=trojan.example.com,udp=true
+Hysteria2=Hysteria2,hy2.example.com,443,"hy2-pass",tls-name=hy2.example.com,skip-cert-verify=false,fast-open=false,udp=true
+SOCKS=socks5,socks.example.com,1080,�ǫ��,,udp=true
+HTTP=http,http.example.com,8080,user,"pass"

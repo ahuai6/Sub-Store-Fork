@@ -1,0 +1,94 @@
+{
+  "outbounds": [
+    {
+      "tag": "SS HK",
+      "type": "shadowsocks",
+      "server": "ss.example.com",
+      "server_port": 8388,
+      "method": "aes-128-gcm",
+      "password": "secret"
+    },
+    {
+      "tag": "VMess",
+      "type": "vmess",
+      "server": "vmess.example.com",
+      "server_port": 443,
+      "uuid": "12345678-1234-1234-1234-123456789abc",
+      "security": "auto",
+      "alter_id": 0,
+      "tls": {
+        "enabled": true,
+        "server_name": "edge.example.com",
+        "insecure": false
+      },
+      "transport": {
+        "type": "ws",
+        "headers": {
+          "Host": "edge.example.com"
+        },
+        "path": "/vmess"
+      }
+    },
+    {
+      "tag": "VLESS",
+      "type": "vless",
+      "server": "vless.example.com",
+      "server_port": 443,
+      "uuid": "12345678-1234-1234-1234-123456789abc",
+      "tls": {
+        "enabled": true,
+        "server_name": "vless.example.com",
+        "insecure": false
+      },
+      "packet_encoding": "xudp",
+      "transport": {
+        "type": "ws",
+        "headers": {
+          "Host": "edge.example.com"
+        },
+        "path": "/vless"
+      }
+    },
+    {
+      "tag": "Trojan",
+      "type": "trojan",
+      "server": "trojan.example.com",
+      "server_port": 443,
+      "password": "trojan-pass",
+      "tls": {
+        "enabled": true,
+        "server_name": "trojan.example.com",
+        "insecure": false
+      }
+    },
+    {
+      "tag": "Hysteria2",
+      "type": "hysteria2",
+      "server": "hy2.example.com",
+      "server_port": 443,
+      "password": "hy2-pass",
+      "tls": {
+        "enabled": true,
+        "server_name": "hy2.example.com",
+        "insecure": false
+      }
+    },
+    {
+      "tag": "SOCKS",
+      "type": "socks",
+      "server": "socks.example.com",
+      "server_port": 1080,
+      "version": "5",
+      "username": "�ǫ��,"
+    },
+    {
+      "tag": "HTTP",
+      "type": "http",
+      "server": "http.example.com",
+      "server_port": 8080,
+      "username": "user",
+      "password": "pass"
+    }
+  ],
+  "endpoints": []
+}

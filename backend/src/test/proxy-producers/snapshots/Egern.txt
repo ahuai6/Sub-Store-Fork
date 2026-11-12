@@ -1,0 +1,8 @@
+proxies:
+  - {"shadowsocks":{"name":"SS HK","method":"aes-128-gcm","server":"ss.example.com","port":8388,"password":"secret","tfo":false,"udp_relay":true}}
+  - {"vmess":{"name":"VMess","server":"vmess.example.com","port":443,"user_id":"12345678-1234-1234-1234-123456789abc","security":"auto","tfo":false,"legacy":false,"udp_relay":true,"transport":{"wss":{"path":"/vmess","headers":{"Host":"edge.example.com"},"sni":"edge.example.com"}}}}
+  - {"vless":{"name":"VLESS","server":"vless.example.com","port":443,"user_id":"12345678-1234-1234-1234-123456789abc","tfo":false,"udp_relay":true,"transport":{"wss":{"path":"/vless","headers":{"Host":"edge.example.com"},"sni":"vless.example.com","skip_tls_verify":false}}}}
+  - {"trojan":{"name":"Trojan","server":"trojan.example.com","port":443,"password":"trojan-pass","tfo":false,"udp_relay":true,"sni":"trojan.example.com"}}
+  - {"hysteria2":{"name":"Hysteria2","server":"hy2.example.com","port":443,"auth":"hy2-pass","tfo":false,"udp_relay":true,"sni":"hy2.example.com","skip_tls_verify":false}}
+  - {"socks5":{"name":"SOCKS","server":"socks.example.com","port":1080,"username":"�ǫ��,","tfo":false,"udp_relay":true}}
+  - {"http":{"name":"HTTP","server":"http.example.com","port":8080,"username":"user","password":"pass","tfo":false}}

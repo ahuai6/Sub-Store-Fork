@@ -76,6 +76,8 @@ jobs:
       - name: Test
         run: |
           cd backend
+          # src/test/proxy-producers/golden-snapshot.spec.js is part of this
+          # glob. Those snapshots must stay byte-identical.
           pnpm test
 
       - name: Bundle
