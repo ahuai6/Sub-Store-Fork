@@ -95,6 +95,9 @@ need('backend/src/utils/prefetch-cron.js', 'prefetch_cron is empty');
 need('backend/src/products/cron-sync-artifacts.js', 'prefetchDecision');
 need('backend/scripts/bench.js', 'outputCacheHit5000');
 need('backend/src/vendor/express.js', 'scriptResourceCache.flush');
+need('backend/src/runtime/build-flags.js', '__SURGE_ONLY__');
+need('backend/bundle-esbuild.js', 'surgeOnly: true');
+need('backend/surge-only-strip.js', '@non-surge-start');
 need('scripts/check/geo.js', 'time_budget');
 need(
     '.github/scripts/publish_public_dist.sh',

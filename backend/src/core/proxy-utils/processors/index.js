@@ -1760,6 +1760,7 @@ function createDynamicFunction(name, script, $arguments, $options) {
         normalizeFlowHeader,
     };
     if ($.env.isLoon) {
+        /* @non-surge-start */
         return new Function(
             '$arguments',
             '$options',
@@ -1801,6 +1802,7 @@ function createDynamicFunction(name, script, $arguments, $options) {
             produceArtifact,
             eval(`typeof require !== "undefined"`) ? require : undefined,
         );
+        /* @non-surge-end */
     } else {
         return new Function(
             '$arguments',

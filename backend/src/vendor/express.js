@@ -28,13 +28,18 @@ export default function express({ substore: $, port, host }) {
         'Access-Control-Allow-Methods': 'POST,GET,OPTIONS,PATCH,PUT,DELETE',
         'Access-Control-Allow-Headers':
             'Origin, X-Requested-With, Content-Type, Accept',
-        'X-Powered-By': isNode
-            ? eval('process.env.SUB_STORE_X_POWERED_BY') || 'Sub-Store'
-            : 'Sub-Store',
+        'X-Powered-By':
+            /* @non-surge-start */
+            isNode
+                ? eval('process.env.SUB_STORE_X_POWERED_BY') || 'Sub-Store'
+                :
+            /* @non-surge-end */
+            'Sub-Store',
     };
 
     // node support
     if (isNode) {
+        /* @non-surge-start */
         const express_ = eval(`require("express")`);
         const bodyParser = eval(`require("body-parser")`);
         const app = express_();
@@ -118,6 +123,7 @@ export default function express({ substore: $, port, host }) {
             });
         };
         return app;
+        /* @non-surge-end */
     }
 
     // route handlers
@@ -289,7 +295,9 @@ export default function express({ substore: $, port, host }) {
                     headers,
                 };
                 if (isQX || isGUIforCores) {
+                    /* @non-surge-start */
                     $done(response);
+                    /* @non-surge-end */
                 } else if (isLoon || isSurge || isEgern) {
                     $done({
                         response,

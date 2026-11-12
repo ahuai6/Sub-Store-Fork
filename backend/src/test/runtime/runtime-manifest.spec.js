@@ -28,6 +28,10 @@ function createFixture() {
         path.join(fixturePath, 'bundle-esbuild.js'),
     );
     fs.copyFileSync(
+        path.join(backendPath, 'surge-only-strip.js'),
+        path.join(fixturePath, 'surge-only-strip.js'),
+    );
+    fs.copyFileSync(
         path.join(backendPath, 'package.json'),
         path.join(fixturePath, 'package.json'),
     );

@@ -799,6 +799,7 @@ export function removeFlag(str) {
 export class MMDB {
     constructor({ country, asn } = {}) {
         if ($.env.isNode) {
+            /* @non-surge-start */
             const Reader = eval(`require("@maxmind/geoip2-node")`).Reader;
             const fs = getFs();
             const countryFile =
@@ -824,6 +825,7 @@ export class MMDB {
                     throw new Error('GeoLite2 ASN MMDB does not exist');
                 this.asnReader = Reader.openBuffer(fs.readFileSync(asnFile));
             }
+            /* @non-surge-end */
         }
     }
     geoip(ip) {
