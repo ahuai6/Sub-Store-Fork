@@ -178,31 +178,60 @@ export class OpenAPI {
                 this.cache = {};
             }
         }
+        this._rememberPersisted();
+    }
+
+    _rememberPersisted() {
+        if (isPlainObject(this.cache)) {
+            this._persistedCache = JSON.stringify(this.cache, null, 2);
+        }
+        if (isNode && isPlainObject(this.root)) {
+            this._persistedRoot = JSON.stringify(this.root, null, 2);
+        }
     }
 
     // store cache
-    persistCache() {
-        const data = JSON.stringify(this.cache, null, 2);
-        if (isQX) $prefs.setValueForKey(data, this.name);
-        if (isLoon || isSurge || isEgern)
-            $persistentStore.write(data, this.name);
-        if (isGUIforCores) $Plugins.SubStoreCache.set(this.name, data);
-        if (isNode) {
-            const basePath =
-                eval('process.env.SUB_STORE_DATA_BASE_PATH') || '.';
-
-            this.node.fs.writeFileSync(
-                `${basePath}/${this.name}.json`,
-                data,
-                { flag: 'w' },
-                (err) => console.log(err),
-            );
-            this.node.fs.writeFileSync(
-                `${basePath}/root.json`,
-                JSON.stringify(this.root, null, 2),
-                { flag: 'w' },
-                (err) => console.log(err),
-            );
+    // fork: skip unchanged store writes. A top-level key still lives in the
+    // same JSON object. Only the file that changed is rewritten, and a write
+    // whose pretty JSON matches the last one is skipped. Debouncing is not
+    // used: $done() cancels timers, and a user script can read the host store
+    // immediately after $.write().
+    persistCache(target = 'both') {
+        const writeCache = target === 'both' || target === 'cache';
+        const writeRoot = (target === 'both' || target === 'root') && isNode;
+        if (writeCache) {
+            const data = JSON.stringify(this.cache, null, 2);
+            if (data !== this._persistedCache) {
+                if (isQX) $prefs.setValueForKey(data, this.name);
+                if (isLoon || isSurge || isEgern)
+                    $persistentStore.write(data, this.name);
+                if (isGUIforCores) $Plugins.SubStoreCache.set(this.name, data);
+                if (isNode) {
+                    const basePath =
+                        eval('process.env.SUB_STORE_DATA_BASE_PATH') || '.';
+                    this.node.fs.writeFileSync(
+                        `${basePath}/${this.name}.json`,
+                        data,
+                        { flag: 'w' },
+                        (err) => console.log(err),
+                    );
+                }
+                this._persistedCache = data;
+            }
+        }
+        if (writeRoot) {
+            const data = JSON.stringify(this.root, null, 2);
+            if (data !== this._persistedRoot) {
+                const basePath =
+                    eval('process.env.SUB_STORE_DATA_BASE_PATH') || '.';
+                this.node.fs.writeFileSync(
+                    `${basePath}/root.json`,
+                    data,
+                    { flag: 'w' },
+                    (err) => console.log(err),
+                );
+                this._persistedRoot = data;
+            }
         }
     }
 
@@ -222,10 +251,11 @@ export class OpenAPI {
             if (isGUIforCores) {
                 return $Plugins.SubStoreCache.set(key, data);
             }
-        } else {
-            this.cache[key] = data;
+            this.persistCache('root');
+            return;
         }
-        this.persistCache();
+        this.cache[key] = data;
+        this.persistCache('cache');
     }
 
     read(key) {
@@ -265,10 +295,11 @@ export class OpenAPI {
             if (isGUIforCores) {
                 return $Plugins.SubStoreCache.remove(key);
             }
-        } else {
-            delete this.cache[key];
+            this.persistCache('root');
+            return;
         }
-        this.persistCache();
+        delete this.cache[key];
+        this.persistCache('cache');
     }
 
     // notification

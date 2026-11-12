@@ -43,6 +43,7 @@ function forbid(rel, marker) {
 
 need('backend/package.json', '"bench"');
 need('backend/src/utils/geo.js', 'fork: getFlag matchers are compiled once');
+need('backend/src/vendor/open-api.js', 'fork: skip unchanged store writes');
 need(
     'backend/src/core/proxy-utils/parsers/peggy/surge.js',
     'fork: peggy parsers are precompiled',
