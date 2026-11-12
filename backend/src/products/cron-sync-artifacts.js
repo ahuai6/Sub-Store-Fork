@@ -18,6 +18,7 @@ import {
     resolveCronArtifactSyncPolicy,
     shouldSkipCronArtifactWithoutUploadCredentials,
 } from '@/utils/artifact-sync-policy';
+import { prefetchDecision } from '@/utils/prefetch-cron';
 
 !(async function () {
     let arg;
@@ -37,7 +38,28 @@ import {
         .map((i) => i.trim())
         .filter((i) => i.length > 0)
         .map((i) => decodeURIComponent(i));
-    if (sub_names.length > 0 || col_names.length > 0) {
+    const prefetch = prefetchDecision(arg);
+    if (prefetch.handled) {
+        if (!prefetch.run) {
+            $.info(prefetch.reason);
+        } else if (sub_names.length > 0 || col_names.length > 0) {
+            $.info(
+                `prefetch_cron ${arg.cron} 预热输出缓存, 目标 ${prefetch.platform}`,
+            );
+            if (sub_names.length > 0) {
+                await produceArtifacts(
+                    sub_names,
+                    'subscription',
+                    prefetch.platform,
+                );
+            }
+            if (col_names.length > 0) {
+                await produceArtifacts(col_names, 'collection', prefetch.platform);
+            }
+        } else {
+            $.info('prefetch 未配置订阅或组合订阅');
+        }
+    } else if (sub_names.length > 0 || col_names.length > 0) {
         if (sub_names.length > 0)
             await produceArtifacts(sub_names, 'subscription');
         if (col_names.length > 0)
@@ -76,7 +98,7 @@ function isTruthyArgument(value, defaultValue = true) {
     return !['false', '0', 'no', 'off'].includes(normalized);
 }
 
-async function produceArtifacts(names, type) {
+async function produceArtifacts(names, type, platform) {
     try {
         if (names.length > 0) {
             $.info(`produceArtifacts ${type} 开始: ${names.join(', ')}`);
@@ -86,6 +108,7 @@ async function produceArtifacts(names, type) {
                         await produceArtifact({
                             type,
                             name,
+                            ...(platform ? { platform } : {}),
                         });
                     } catch (e) {
                         $.error(`${type} ${name} error: ${e.message ?? e}`);
