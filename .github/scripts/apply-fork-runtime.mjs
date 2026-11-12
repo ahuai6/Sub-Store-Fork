@@ -57,6 +57,16 @@ need(
 );
 need('backend/scripts/precompile-peggy.js', 'precompilePeggy');
 need('backend/bundle-esbuild.js', 'precompilePeggy');
+need(
+    'backend/src/products/sub-store-0.js',
+    'fork: sub-store-0 does not import ProxyUtils',
+);
+need('backend/src/products/sub-store-1.js', 'registerFileRoutes');
+forbid('backend/src/products/sub-store-0.js', 'registerFileRoutes');
+need(
+    '.github/scripts/render_surge_beta_module.py',
+    'share\\/file(?:\\/|\\?|#|$)',
+);
 forbid(
     'backend/src/core/proxy-utils/parsers/peggy/surge.js',
     'peggy.generate',

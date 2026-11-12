@@ -12,7 +12,7 @@ import {
 } from '@/utils/archive';
 import { createSubscriptionItem } from '@/restful/subscriptions';
 import { createCollectionItem } from '@/restful/collections';
-import { createFileItem } from '@/restful/file';
+import { createFileItem } from '@/restful/file-items';
 import { createArtifactItem } from '@/restful/artifacts';
 import { createTokenItem } from '@/restful/token';
 
