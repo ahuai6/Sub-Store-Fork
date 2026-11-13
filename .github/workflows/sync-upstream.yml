@@ -5,9 +5,15 @@ name: sync-upstream
 # clean merge, the fork frontend redirect and CORS origin are reapplied; if
 # that patch no longer matches, main is not pushed and an issue is opened.
 # This workflow never force-pushes.
+#
+# The daily run moved to the public repo. This private repo's Actions
+# spending limit refuses jobs before they start. The workflow that syncs
+# upstream into this repo is:
+# https://github.com/ahuai6/Sub-Store-Fork-Dist/blob/main/.github/workflows/sync-upstream.yml
+# That copy sets the actions bot identity before `git merge` (the empty ident
+# name fix) and pushes here with FORK_REPO_TOKEN. Keep this file. Do not add
+# the schedule back here. Dist's schedule is 04:17 UTC.
 on:
-  schedule:
-    - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions:
