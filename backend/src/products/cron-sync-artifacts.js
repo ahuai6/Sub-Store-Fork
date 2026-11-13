@@ -18,7 +18,7 @@ import {
     resolveCronArtifactSyncPolicy,
     shouldSkipCronArtifactWithoutUploadCredentials,
 } from '@/utils/artifact-sync-policy';
-import { prefetchDecision } from '@/utils/prefetch-cron';
+import { prefetchDecision, prefetchNames } from '@/utils/prefetch-cron';
 
 !(async function () {
     let arg;
@@ -40,6 +40,8 @@ import { prefetchDecision } from '@/utils/prefetch-cron';
         .map((i) => decodeURIComponent(i));
     const prefetch = prefetchDecision(arg);
     if (prefetch.handled) {
+        sub_names = prefetchNames(arg?.subscription ?? arg?.sub);
+        col_names = prefetchNames(arg?.collection ?? arg?.col);
         if (!prefetch.run) {
             $.info(prefetch.reason);
         } else if (sub_names.length > 0 || col_names.length > 0) {
@@ -54,7 +56,11 @@ import { prefetchDecision } from '@/utils/prefetch-cron';
                 );
             }
             if (col_names.length > 0) {
-                await produceArtifacts(col_names, 'collection', prefetch.platform);
+                await produceArtifacts(
+                    col_names,
+                    'collection',
+                    prefetch.platform,
+                );
             }
         } else {
             $.info('prefetch 未配置订阅或组合订阅');
