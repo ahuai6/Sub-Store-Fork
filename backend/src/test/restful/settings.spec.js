@@ -2,13 +2,24 @@ import { expect } from 'chai';
 import { afterEach, describe, it } from 'mocha';
 
 import $ from '@/core/app';
-import { SETTINGS_KEY } from '@/constants';
+import {
+    DEFAULT_CACHE_TTL,
+    DEFAULT_HEADERS_CACHE_TTL,
+    DEFAULT_SCRIPT_CACHE_TTL,
+    SETTINGS_KEY,
+} from '@/constants';
 import registerSettingsRoutes, {
     getGithubAvatarApiUrl,
     shouldRefreshArtifactStoreForSettingsPatch,
 } from '@/restful/settings';
 import { AGE_SECRET_KEY, generateKeyPair } from '@/utils/age';
+import { ttlFromSetting } from '@/utils/bounded-cache';
+import { scriptCheckTtlMs } from '@/utils/check-result-cache';
 import Gist from '@/utils/gist';
+import headersCache from '@/utils/headers-resource-cache';
+import { resourceOutputTtlMs } from '@/utils/output-cache';
+import resourceCache from '@/utils/resource-cache';
+import scriptCache from '@/utils/script-resource-cache';
 
 function createRouteApp() {
     const handlers = new Map();
@@ -433,6 +444,257 @@ describe('settings routes', function () {
                     'backendRequestConcurrencyWaitTime',
                 );
             }
+        });
+    });
+
+    describe('cache TTL settings', function () {
+        const originalRead = $.read.bind($);
+        const originalWrite = $.write.bind($);
+        const caches = [
+            ['resourceCacheTtl', resourceCache, DEFAULT_CACHE_TTL],
+            ['headersCacheTtl', headersCache, DEFAULT_HEADERS_CACHE_TTL],
+            ['scriptCacheTtl', scriptCache, DEFAULT_SCRIPT_CACHE_TTL],
+        ];
+
+        afterEach(function () {
+            $.read = originalRead;
+            $.write = originalWrite;
+            resourceCache.revokeAll();
+            headersCache.revokeAll();
+            scriptCache.revokeAll();
+        });
+
+        async function patchSettings(initialSettings, body) {
+            const state = {
+                [SETTINGS_KEY]: initialSettings,
+            };
+            $.read = (key) => state[key];
+            $.write = (data, key) => {
+                state[key] = data;
+                return true;
+            };
+
+            const app = createRouteApp();
+            registerSettingsRoutes(app);
+            const patchHandler = app.handlers.get('PATCH /api/settings');
+            const res = createResponse('/api/settings');
+
+            await patchHandler({ body }, res);
+
+            expect(res.body.status).to.equal('success');
+            return state[SETTINGS_KEY];
+        }
+
+        function expectCacheDisabled(cache) {
+            cache.set('ttl-probe', 'cached', 9999999);
+            expect(cache.resourceCache['ttl-probe']).to.equal(undefined);
+            expect(cache.get('ttl-probe')).to.equal(null);
+            expect(cache.gettime('ttl-probe')).to.equal(null);
+        }
+
+        function expectCacheUsesDefault(cache) {
+            cache.set('ttl-probe', 'cached');
+            expect(cache.get('ttl-probe')).to.equal('cached');
+        }
+
+        it('stores numeric 0 and disables each cache', async function () {
+            const settings = await patchSettings(
+                {},
+                {
+                    resourceCacheTtl: 0,
+                    headersCacheTtl: 0,
+                    scriptCacheTtl: 0,
+                },
+            );
+
+            expect(settings).to.deep.include({
+                resourceCacheTtl: 0,
+                headersCacheTtl: 0,
+                scriptCacheTtl: 0,
+            });
+            for (const [key, cache, fallback] of caches) {
+                expect(ttlFromSetting(() => settings, key, fallback)).to.equal(
+                    0,
+                );
+                expectCacheDisabled(cache);
+            }
+            expect(resourceOutputTtlMs()).to.equal(0);
+            expect(scriptCheckTtlMs()).to.equal(0);
+        });
+
+        it('stores the string 0 sent by the settings UI and disables each cache', async function () {
+            const settings = await patchSettings(
+                {},
+                {
+                    resourceCacheTtl: '0',
+                    headersCacheTtl: ' 0 ',
+                    scriptCacheTtl: '0.0',
+                },
+            );
+
+            expect(settings).to.deep.include({
+                resourceCacheTtl: '0',
+                headersCacheTtl: '0',
+                scriptCacheTtl: '0',
+            });
+            for (const [key, cache, fallback] of caches) {
+                expect(ttlFromSetting(() => settings, key, fallback)).to.equal(
+                    0,
+                );
+                expectCacheDisabled(cache);
+            }
+            expect(resourceOutputTtlMs()).to.equal(0);
+            expect(scriptCheckTtlMs()).to.equal(0);
+        });
+
+        it('drops empty TTL values so the default cache is used', async function () {
+            const settings = await patchSettings(
+                {
+                    resourceCacheTtl: 0,
+                    headersCacheTtl: '0',
+                    scriptCacheTtl: 30,
+                },
+                {
+                    resourceCacheTtl: '',
+                    headersCacheTtl: '   ',
+                    scriptCacheTtl: null,
+                },
+            );
+
+            expect(settings).to.not.have.property('resourceCacheTtl');
+            expect(settings).to.not.have.property('headersCacheTtl');
+            expect(settings).to.not.have.property('scriptCacheTtl');
+            for (const [key, cache, fallback] of caches) {
+                expect(ttlFromSetting(() => settings, key, fallback)).to.equal(
+                    fallback,
+                );
+                expectCacheUsesDefault(cache);
+                cache.revokeAll();
+            }
+            expect(resourceOutputTtlMs()).to.equal(DEFAULT_CACHE_TTL);
+            expect(scriptCheckTtlMs()).to.equal(DEFAULT_SCRIPT_CACHE_TTL);
+        });
+
+        it('leaves positive TTL values unchanged', async function () {
+            const settings = await patchSettings(
+                { resourceCacheTtl: 1, headersCacheTtl: '1' },
+                {
+                    resourceCacheTtl: 3600,
+                    headersCacheTtl: '120',
+                    scriptCacheTtl: ' 48 ',
+                },
+            );
+
+            expect(settings).to.deep.include({
+                resourceCacheTtl: 3600,
+                headersCacheTtl: '120',
+                scriptCacheTtl: ' 48 ',
+            });
+            expect(
+                ttlFromSetting(
+                    () => settings,
+                    'resourceCacheTtl',
+                    DEFAULT_CACHE_TTL,
+                ),
+            ).to.equal(3600 * 1000);
+            expect(
+                ttlFromSetting(
+                    () => settings,
+                    'headersCacheTtl',
+                    DEFAULT_HEADERS_CACHE_TTL,
+                ),
+            ).to.equal(120 * 1000);
+            expect(
+                ttlFromSetting(
+                    () => settings,
+                    'scriptCacheTtl',
+                    DEFAULT_SCRIPT_CACHE_TTL,
+                ),
+            ).to.equal(48 * 1000);
+            expectCacheUsesDefault(resourceCache);
+        });
+
+        it('stores a negative TTL as zero and drops non-numeric values', async function () {
+            const negative = await patchSettings(
+                {},
+                {
+                    resourceCacheTtl: -5,
+                    headersCacheTtl: '-3',
+                    scriptCacheTtl: -0,
+                },
+            );
+
+            expect(negative).to.deep.include({
+                resourceCacheTtl: 0,
+                headersCacheTtl: '0',
+                scriptCacheTtl: 0,
+            });
+            expectCacheDisabled(resourceCache);
+            expectCacheDisabled(headersCache);
+            expectCacheDisabled(scriptCache);
+
+            const invalid = await patchSettings(
+                {
+                    resourceCacheTtl: 0,
+                    headersCacheTtl: '0',
+                    scriptCacheTtl: 15,
+                },
+                {
+                    resourceCacheTtl: 'abc',
+                    headersCacheTtl: Number.NaN,
+                    scriptCacheTtl: Number.POSITIVE_INFINITY,
+                },
+            );
+
+            expect(invalid).to.not.have.property('resourceCacheTtl');
+            expect(invalid).to.not.have.property('headersCacheTtl');
+            expect(invalid).to.not.have.property('scriptCacheTtl');
+            expect(
+                ttlFromSetting(
+                    () => invalid,
+                    'scriptCacheTtl',
+                    DEFAULT_SCRIPT_CACHE_TTL,
+                ),
+            ).to.equal(DEFAULT_SCRIPT_CACHE_TTL);
+        });
+
+        it('keeps a stored zero when a later patch omits the TTL keys', async function () {
+            const settings = await patchSettings(
+                {
+                    resourceCacheTtl: 0,
+                    headersCacheTtl: '0',
+                    scriptCacheTtl: 15,
+                },
+                { logsMaxCount: 2 },
+            );
+
+            expect(settings).to.deep.include({
+                resourceCacheTtl: 0,
+                headersCacheTtl: '0',
+                scriptCacheTtl: 15,
+                logsMaxCount: 2,
+            });
+            expectCacheDisabled(resourceCache);
+        });
+
+        it('still drops non-positive timeout and cache threshold values', async function () {
+            const settings = await patchSettings(
+                {
+                    defaultTimeout: 8000,
+                    cacheThreshold: 1024,
+                    resourceCacheTtl: 30,
+                },
+                {
+                    defaultTimeout: 0,
+                    cacheThreshold: '',
+                    resourceCacheTtl: 0,
+                },
+            );
+
+            expect(settings).to.not.have.property('defaultTimeout');
+            expect(settings).to.not.have.property('cacheThreshold');
+            expect(settings.resourceCacheTtl).to.equal(0);
+            expectCacheDisabled(resourceCache);
         });
     });
 });

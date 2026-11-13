@@ -87,6 +87,16 @@ $platform = "Surge"
 | `headersCacheTtl` | 1 分钟（`DEFAULT_HEADERS_CACHE_TTL`） | 资源响应头，以及流量信息 |
 | `scriptCacheTtl` | 48 小时（`DEFAULT_SCRIPT_CACHE_TTL`） | 脚本资源缓存、`geo.js` 的 `cache`、共享节点检测结果 |
 
+`PATCH /api/settings` 会把上表三个键的 `0` 存下来，缓存因此关闭。规则：
+
+- 数字 `0` 存成 `0`。字符串 `"0"`、`"0.0"` 和带空白的 `" 0 "` 存成 `"0"`。上游设置页 `src/views/My.vue` 用 `nut-input type="number"`，`v-model` 提交的是字符串；`src/store/settings.ts` 用 `value || ""` 读回。数字 `0` 会被读成空字符串，下次保存缓存设置会把键清掉。`"0"` 能显示，并且 `Number("0") === 0`，缓存关闭。
+- 负数收成 `0`（数字）或 `"0"`（字符串），与提交类型一致。`ttlFromSetting` 把已存的非正数都当成关闭，接口不拒绝负数。
+- `null`、空字符串、纯空白、非数字（含 `NaN`、`Infinity`）删掉键，用上表缺省。清空输入是恢复默认。`Number("") === 0`，所以要在转成数字之前认出空值。
+- 正数保持提交时的类型和内容。数字 `3600` 仍是 `3600`，字符串 `"120"` 仍是 `"120"`。
+- 本次 patch 没有带上的键保持原值。已经存下的 `0` 不会被另一次设置更新删掉。
+
+`defaultTimeout`、`githubApiTimeout`、`artifactSyncBatchSize`、`cacheThreshold` 仍是非正数或非数字就删键。
+
 指纹、内容哈希、节点配置未变，都只是 TTL 窗口内的键。窗口结束就完整重算。缩短 TTL 后，已有条目的有效期会被 `created + 当前 TTL`  cap 住。`noCache`、`noOutputCache`，以及 `settings.outputCache` 为 false/0/off，会跳过输出缓存。命中输出缓存之后，响应转换和 age 加密仍按当次请求执行。
 
 存储键：
@@ -321,7 +331,7 @@ gh api repos/ahuai6/Sub-Store-Fork/commits/<SHA>/statuses
 ## 8. 已知风险与待办
 
 - `geo.js` 的许可证没有完全收口。`GEO-NOTICE.md` 记录上游仓库 `xream/scripts` 在 `49248e431b1ebb3f55b6d384a25582f74cde8207` 的 GPL-3.0，同时记录该 README 里的额外免责、使用限制和 24 小时删除要求。这些文字和 GPL 同时存在，法律解释没有被认定。发布是仓库所有者在 2026-11-13 明确要求的。不要扩大公开源码，不要删掉 notice。
-- 设置接口目前写不进 TTL 0。`ttlFromSetting` 只在键存在且 `<= 0` 时关闭缓存。`backend/src/restful/settings.js` 的 `updateSettings` 会把 `resourceCacheTtl`、`headersCacheTtl`、`scriptCacheTtl` 的非正数删掉。键被删掉之后等于未设置，缓存回到 1 小时、1 分钟、48 小时。测试是直接把 0 写进 store。不要把“在设置里填 0”写成已经能关闭缓存。若要让接口保留 0，那是行为变更，先问用户。
+- 设置接口写不进 TTL 0 的问题已修复。`resourceCacheTtl`、`headersCacheTtl`、`scriptCacheTtl` 保存 `0` 或 `"0"` 后会关闭对应缓存；空值恢复缺省。规则在第 2 节。
 - PR #12 已关闭、未合并。不要重新打开并合并它的上游 head。`sync/upstream` 分支保留，以后的同步可能再次使用它。
 - Dist 的 `Built from` 在 squash 之后会落后于真实包含的上游内容。写本文时 Dist README 和 Release `2.44.11` 的 `Built from` 是 `85a458aba7b787d31ec2a554fcc995333525ba30`，`Upstream tree` 是 `091e6f8d8c2dcec8c1d8e792ecee4304935d6e90`。私有 `main` 已是 `7d4d0c410254c69b2861312a9bc03c2065b961de`，`origin/upstream` 是 `d9896398feeb55c42fa3bd15f70104dd02b13899`。下一次 `publish-dist` 会因为 SHA 不同而重发，并把 `Upstream tree` 记成当时的 `git merge-base`。这些 SHA 会过期，以 Dist README 为准。
 - 写本文时 `gh-pages` 的 `frontend-version.txt` 是前端 `2.34.3`、sha `59632bfcba5193fcf213b545e025252007ca15aa`、`patches=subpath-routes-1-surge-session-1`、base `/Sub-Store-Fork-Dist/`、api `https://sub.store`。实时首页含 `<meta name="sub-store-fork" content="api-cap-2 skip-restored-preview" />`。`docs/performance-plan-audit.md` 里“补丁尚未部署”的句子已经过时。

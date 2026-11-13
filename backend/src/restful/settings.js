@@ -32,6 +32,35 @@ function hasOwn(object, key) {
     return Object.prototype.hasOwnProperty.call(object || {}, key);
 }
 
+// Seconds. ttlFromSetting disables a cache when the key is present and the
+// value is not a positive finite number, and uses the default only when the
+// key is absent. Empty / invalid input drops the key (default). Zero stays
+// stored so the cache stays off. A negative is stored as zero: ttlFromSetting
+// already treats it as disabled, and the request is not rejected.
+//
+// The upstream settings page (nut-input type="number") submits strings. A
+// string zero is stored as "0", not the number 0. The page reads the value
+// back with `value || ""`, which turns a numeric 0 into an empty field and
+// would clear the key on the next save. "0" still displays, and
+// Number("0") === 0, so the cache is disabled. Positive values are kept as
+// submitted, including a numeric string such as "120".
+function normalizeCacheTtlSetting(raw) {
+    if (typeof raw === 'number') {
+        if (!Number.isFinite(raw)) return undefined;
+        if (raw > 0) return raw;
+        return 0;
+    }
+    if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (trimmed === '') return undefined;
+        const value = Number(trimmed);
+        if (!Number.isFinite(value)) return undefined;
+        if (value > 0) return raw;
+        return '0';
+    }
+    return undefined;
+}
+
 function shouldValidateGistAgeSecretKey(settings, body = {}) {
     return (
         body.gistUpload === 'age' ||
@@ -123,15 +152,25 @@ async function updateSettings(req, res) {
             'githubApiTimeout',
             'artifactSyncBatchSize',
             'cacheThreshold',
-            'resourceCacheTtl',
-            'headersCacheTtl',
-            'scriptCacheTtl',
         ].map((key) => {
             let value = Number(newSettings[key]);
             if (!isFinite(value) || value <= 0) {
                 delete newSettings[key];
             }
         });
+        for (const key of [
+            'resourceCacheTtl',
+            'headersCacheTtl',
+            'scriptCacheTtl',
+        ]) {
+            if (!hasOwn(newSettings, key)) continue;
+            const normalized = normalizeCacheTtlSetting(newSettings[key]);
+            if (normalized === undefined) {
+                delete newSettings[key];
+            } else {
+                newSettings[key] = normalized;
+            }
+        }
         if ('logsMaxCount' in newSettings) {
             const rawLogsMaxCount = newSettings.logsMaxCount;
             const value = Number(rawLogsMaxCount);
