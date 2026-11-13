@@ -18,8 +18,11 @@ Existing arguments and output templates still work. New arguments are optional:
 | `reachability_timeout` | 1500 | Phase-one timeout in milliseconds, capped at 5000; no retries. |
 | `dedup_target` | false | Share concurrent requests for the same server, port and proxy type within this invocation, even if credentials differ. |
 | `time_budget` | existing optional argument | Milliseconds; stop starting nodes, phase two, and retries once exhausted. Requests use the remaining timeout. Safety ceiling is 880000 ms, leaving time before Surge's 900 s script limit. |
+| `keep_last` | false | After a normal test, reuse that node's last successful result when the test fails, times out, or is skipped because the time budget ran out. No extra output field marks the reuse. |
+| `keep_last_max_age` | unset | Maximum age of a reused result. A bare number is milliseconds, same as `timeout` and `time_budget`. A unit suffix is also accepted: `3600s`, `24h`, `7d`. Unset, empty, or `0` keeps the result until a newer success or until refresh. |
 
 For example: `two_phase=true&reachability_timeout=1500&time_budget=120000`.
+To keep the last success when a later check fails: `keep_last=true&keep_last_max_age=7d`.
 Choose a probe URL reachable in your network. A failed probe is treated like an
 existing failed geo check, including `remove_failed` and failure-cache behavior.
 A node skipped because of budget exhaustion keeps its original name and gets no
@@ -37,9 +40,23 @@ because their previous geo results reported the same exit IP.
 
 Repeated results across invocations require `cache` and the existing TTL-bound
 stores. New modes have distinct cache keys. `scriptCacheTtl=0` disables reads and
-writes in every geo path, including the legacy script cache. Expired node config
-hashes never bypass a new test. Pending shared-check completion after refresh
-cannot repopulate the shared store.
+writes in every TTL-bound geo path, including the legacy script cache. Expired
+node config hashes never bypass a new test. Pending shared-check completion after
+refresh cannot repopulate the shared store.
+
+`keep_last` is the explicit exception to that TTL. It is off unless the script
+argument is set. Each fresh successful measurement overwrites the stored result
+for that node. A failed, timed-out, or budget-skipped node is rendered from that
+stored result only when one exists and is inside `keep_last_max_age`. The node
+key is `cacheId` from `scripts/check/geo.js`: the same hash the script cache
+already uses, so a different name, server, or credential does not reuse another
+node's result. `collectionName`, `subName`, `id`, and `_` fields are ignored,
+matching that cache. `dedup_target` does not widen this store. Failures never
+write it and never delete it. `scriptCacheTtl`, including an explicit `0`, does
+not expire it. `/api/utils/refresh` and clear-cache call `revokeAll`, which
+deletes the manifest and every shard. The value lives in `#sub-store-cached-last-good`
+and uses the same sharded helper as the other large caches. Writes are batched
+(25 entries, and once more when the script finishes), not once per node.
 
 ## Storage and migration
 

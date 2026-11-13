@@ -185,6 +185,19 @@ operator; see [GEO-NOTICE.md](./GEO-NOTICE.md) for attribution, upstream terms,
 changes and optional arguments, and [GEO-LICENSE.txt](./GEO-LICENSE.txt) for the
 upstream GPL-3.0 license. It is separate from the backend's AGPL license.
 
+Optional arguments (all default off / unchanged output):
+
+| Argument | Meaning |
+| --- | --- |
+| \`two_phase\` | Probe reachability before the geo request. |
+| \`dedup_target\` | Share one in-flight request for the same server, port, and proxy type. |
+| \`time_budget\` | Milliseconds. Stop starting further nodes once exhausted. |
+| \`keep_last\` | On failure, timeout, or a \`time_budget\` skip, reuse that node's last success. No marker is added. |
+| \`keep_last_max_age\` | Max age of that success. Milliseconds, or \`3600s\` / \`24h\` / \`7d\`. Omit to keep it until refresh. |
+
+Example: \`keep_last=true&keep_last_max_age=7d\`. \`keep_last\` is not expired by
+\`scriptCacheTtl\`. Refresh and clear-cache delete it with the other caches.
+
 ## License
 
 Sub-Store is licensed under the GNU Affero General Public License v3.0. See [LICENSE](./LICENSE).

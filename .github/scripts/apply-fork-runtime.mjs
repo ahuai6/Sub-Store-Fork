@@ -120,6 +120,11 @@ need('scripts/check/GEO-LICENSE.txt', 'GNU GENERAL PUBLIC LICENSE');
 need('.github/workflows/publish-dist.yml', 'test_render_surge_beta_module.py');
 need('.github/scripts/publish_public_dist.sh', 'GEO-NOTICE.md');
 need('scripts/check/geo.js', 'time_budget');
+need('scripts/check/geo.js', 'keep_last');
+need('backend/src/utils/last-good-cache.js', 'new CacheShards');
+need('backend/src/utils/script-resource-cache.js', 'lastGoodCache.revokeAll');
+need('backend/src/restful/miscs.js', 'lastGoodCache.revokeAll');
+need('scripts/check/GEO-NOTICE.md', 'keep_last');
 need(
     '.github/scripts/publish_public_dist.sh',
     'not copied to the public artifact repo',

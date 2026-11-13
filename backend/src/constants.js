@@ -21,6 +21,9 @@ export const OUTPUT_CACHE_KEY = '#sub-store-cached-output';
 // Network check results shared by script operators. Separate store so the
 // script-resource batching behavior stays the same.
 export const CHECK_RESULT_CACHE_KEY = '#sub-store-cached-check';
+// Last successful geo result. Opt-in via keep_last. Not expired by
+// scriptCacheTtl; /api/utils/refresh and clear-cache drop every shard.
+export const LAST_GOOD_CACHE_KEY = '#sub-store-cached-last-good';
 export const LOGS_KEY = '#sub-store-logs';
 export const DEFAULT_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 export const DEFAULT_HEADERS_CACHE_TTL = 60 * 1000; // 1 min
