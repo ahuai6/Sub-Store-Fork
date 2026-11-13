@@ -77,7 +77,8 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
 5. `pnpm bundle:esbuild`；运行模块 Python 回归测试和 renderer `--check`。
    前端变化还要验证 prepare_frontend_pages.py 补丁锚点、构建产物和 patch stamp。
 6. PR 描述写明上游范围、冲突取舍、fork 保留情况、验证和手动升级事项。
-   等 publish-dist PR 检查绿，再由用户确认合并。保留分支。
+   等 publish-dist PR 检查绿，确认符合既定约束后可直接合并；用户已授权常规 PR 无需逐个批准。
+   确需用户作决定的重要取舍再确认。保留分支。
 7. 合并后核对 main 发布检查、公开 module/geo 内容和 release source SHA；需要前端手动构建时明确告诉用户。
 
 已有项目约定见根目录 `AGENTS.md`。历史性能与兼容性核对见 `performance-plan-audit.md`。
