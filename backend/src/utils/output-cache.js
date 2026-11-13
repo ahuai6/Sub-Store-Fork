@@ -1,10 +1,6 @@
 import { version } from '../../package.json';
 import $ from '@/core/app';
-import {
-    DEFAULT_CACHE_TTL,
-    OUTPUT_CACHE_KEY,
-    SETTINGS_KEY,
-} from '@/constants';
+import { DEFAULT_CACHE_TTL, OUTPUT_CACHE_KEY, SETTINGS_KEY } from '@/constants';
 import { AGE_SECRET_KEY } from '@/utils/age';
 import { hex_md5 } from '@/vendor/md5';
 import {
@@ -37,8 +33,8 @@ import {
  * that includes script operators.
  *
  * Size: a body larger than settings.cacheThreshold KB (default 1024) is not
- * stored. The whole value stays under 3 MB so it fits the 4 MB iOS
- * $persistentStore cap. Oldest entries are evicted. The clear-cache action
+ * stored. Large maps use independent per-key shards under 3 MB, fitting the
+ * 4 MB iOS per-value limit without evicting unrelated keys. The clear-cache action
  * (/api/utils/refresh) calls revokeAll().
  */
 
@@ -86,6 +82,7 @@ function entryBudgetFromSettings() {
 class OutputCache extends BoundedCache {
     constructor() {
         super({
+            sharded: true,
             storeKey: OUTPUT_CACHE_KEY,
             label: '输出缓存',
             resolveTtl: () => resourceOutputTtlMs(),
@@ -105,7 +102,11 @@ function dropEmpty(value) {
     }
     const out = {};
     for (const key of Object.keys(value).sort()) {
-        if (value[key] !== undefined && value[key] !== null && value[key] !== '') {
+        if (
+            value[key] !== undefined &&
+            value[key] !== null &&
+            value[key] !== ''
+        ) {
             out[key] = value[key];
         }
     }
@@ -193,7 +194,9 @@ export function readCachedOutput(material, { includeRaw = false, raw } = {}) {
     const hit = cache.get(id);
     if (typeof hit !== 'string') return undefined;
     $.info(
-        `输出缓存命中: ${material.kind || ''} ${material.name || ''} (${id.slice(0, 8)})`,
+        `输出缓存命中: ${material.kind || ''} ${
+            material.name || ''
+        } (${id.slice(0, 8)})`,
     );
     if (!includeRaw) return hit;
     return { result: hit, raw };
@@ -207,7 +210,9 @@ export function writeCachedOutput(material, result) {
     const stored = cache.set(id, result);
     if (stored) {
         $.info(
-            `输出缓存已写入: ${material.kind || ''} ${material.name || ''} (${id.slice(0, 8)})`,
+            `输出缓存已写入: ${material.kind || ''} ${
+                material.name || ''
+            } (${id.slice(0, 8)})`,
         );
     }
     return stored;

@@ -25,8 +25,8 @@ import {
  * sharedCheck / sharedCheckGet / sharedCheckSet / sharedCheckClaim on that
  * same object. The clear-cache action drops this store.
  *
- * Size: results over cacheThreshold (default 1024 KB) are not stored. The
- * document stays under 3 MB. Oldest entries are evicted.
+ * Size: results over cacheThreshold (default 1024 KB) are not stored. Large maps use per-key
+ * shards under 3 MB; unrelated keys are not evicted.
  */
 
 const DISPLAY_FIELD =
@@ -37,7 +37,11 @@ function readSettings() {
 }
 
 export function scriptCheckTtlMs() {
-    return ttlFromSetting(readSettings, 'scriptCacheTtl', DEFAULT_SCRIPT_CACHE_TTL);
+    return ttlFromSetting(
+        readSettings,
+        'scriptCacheTtl',
+        DEFAULT_SCRIPT_CACHE_TTL,
+    );
 }
 
 function entryBudgetFromSettings() {
@@ -74,11 +78,13 @@ function cloneData(value) {
 class CheckResultCache extends BoundedCache {
     constructor() {
         super({
+            sharded: true,
             storeKey: CHECK_RESULT_CACHE_KEY,
             label: '检查缓存',
             resolveTtl: () => scriptCheckTtlMs(),
         });
         this._inflight = new Map();
+        this._generation = 0;
     }
 
     entryBudget() {
@@ -86,6 +92,7 @@ class CheckResultCache extends BoundedCache {
     }
 
     revokeAll() {
+        this._generation += 1;
         this._inflight.clear();
         super.revokeAll();
     }
@@ -94,21 +101,32 @@ class CheckResultCache extends BoundedCache {
         const key = checkKey(identity);
         const cached = this.get(key);
         if (cached != null) return { cached: cloneData(cached) };
-        if (this._inflight.has(key)) return { pending: this._inflight.get(key) };
+        if (this._inflight.has(key))
+            return { pending: this._inflight.get(key) };
+        const generation = this._generation;
+        let settled = false;
         let finish;
         const pending = new Promise((resolve, reject) => {
             finish = (value, error) => {
-                if (this._inflight.get(key) === pending) this._inflight.delete(key);
+                if (settled) return;
+                settled = true;
+                if (this._inflight.get(key) === pending)
+                    this._inflight.delete(key);
                 if (error) {
                     reject(error);
                     return;
                 }
-                if (value != null && scriptCheckTtlMs() > 0) {
+                if (
+                    generation === this._generation &&
+                    value != null &&
+                    scriptCheckTtlMs() > 0
+                ) {
                     this.set(key, cloneData(value));
                 }
                 resolve(cloneData(value));
             };
         });
+        pending.catch(() => {}); // claim owner may have no waiters
         this._inflight.set(key, pending);
         return { finish };
     }

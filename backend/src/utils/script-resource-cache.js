@@ -1,4 +1,6 @@
 import $ from '@/core/app';
+import { CacheShards, jsonBytes, SHARD_BYTES } from '@/utils/cache-shards';
+import { ttlFromSetting } from '@/utils/bounded-cache';
 import {
     SCRIPT_RESOURCE_CACHE_KEY,
     DEFAULT_SCRIPT_CACHE_TTL,
@@ -20,20 +22,8 @@ class ResourceCache {
         this._timer = null;
         this._writesSinceFlush = 0;
         this._flushing = false;
-        if (!$.read(SCRIPT_RESOURCE_CACHE_KEY)) {
-            $.write('{}', SCRIPT_RESOURCE_CACHE_KEY);
-        }
-        try {
-            this.resourceCache = JSON.parse($.read(SCRIPT_RESOURCE_CACHE_KEY));
-        } catch (e) {
-            $.error(
-                `解析持久化缓存中的 ${SCRIPT_RESOURCE_CACHE_KEY} 失败, 重置为 {}, 错误: ${
-                    e?.message ?? e
-                }`,
-            );
-            this.resourceCache = {};
-            $.write('{}', SCRIPT_RESOURCE_CACHE_KEY);
-        }
+        this.shards = new CacheShards(SCRIPT_RESOURCE_CACHE_KEY);
+        this.resourceCache = this.shards.load();
         this._cleanup();
     }
 
@@ -51,7 +41,7 @@ class ResourceCache {
         Object.entries(this.resourceCache).forEach((entry) => {
             const [id, cached] = entry;
             const shouldDelete =
-                !cached.time || cached.time < now + resolvedTTL;
+                !cached?.time || cached.time <= now + resolvedTTL;
             if (shouldDelete && (prefix ? id.startsWith(prefix) : true)) {
                 delete this.resourceCache[id];
                 clear = true;
@@ -73,7 +63,11 @@ class ResourceCache {
     }
 
     _persist() {
-        $.write(JSON.stringify(this.resourceCache), SCRIPT_RESOURCE_CACHE_KEY);
+        for (const [id, cached] of Object.entries(this.resourceCache)) {
+            if (!cached?.time || cached.time <= Date.now())
+                delete this.resourceCache[id];
+        }
+        this.shards.save(this.resourceCache);
     }
 
     _writeThrough() {
@@ -119,19 +113,35 @@ class ResourceCache {
     }
 
     gettime(id) {
-        const time = this.resourceCache[id] && this.resourceCache[id].time;
-        if (time && new Date().getTime() <= time) {
-            return this.resourceCache[id].time;
+        const cached = this.resourceCache[id];
+        const time =
+            cached &&
+            Math.min(
+                cached.time,
+                cached.created != null
+                    ? cached.created + getTTL()
+                    : cached.time,
+            );
+        if (getTTL() > 0 && time && Date.now() < time) {
+            return time;
         }
         return null;
     }
 
     get(id, ttl, remove) {
+        if (!(getTTL() > 0)) return null;
         const resolvedTTL = normalizeTTL(ttl) ?? 0;
         const cached = this.resourceCache[id];
-        const time = cached && cached.time;
+        const time =
+            cached &&
+            Math.min(
+                cached.time,
+                cached.created != null
+                    ? cached.created + getTTL()
+                    : cached.time,
+            );
         if (time) {
-            if (Date.now() + resolvedTTL <= time) return cached.data;
+            if (Date.now() + resolvedTTL < time) return cached.data;
             if (remove) {
                 delete this.resourceCache[id];
                 this._writeThrough();
@@ -141,9 +151,16 @@ class ResourceCache {
     }
 
     set(id, value, ttl) {
-        const resolvedTTL = normalizeTTL(ttl) ?? getTTL();
+        if (!(getTTL() > 0)) return;
+        const resolvedTTL = Math.min(normalizeTTL(ttl) ?? getTTL(), getTTL());
+        if (
+            jsonBytes([id, { time: Date.now() + resolvedTTL, data: value }]) >
+            SHARD_BYTES
+        )
+            return;
         this.resourceCache[id] = {
             time: Date.now() + resolvedTTL,
+            created: Date.now(),
             data: value,
         };
         this._schedule();
@@ -158,15 +175,11 @@ function normalizeTTL(ttl) {
 }
 
 function getTTL() {
-    const settings = $.read(SETTINGS_KEY) || {};
-    let ttl = settings?.scriptCacheTtl;
-    if (ttl) {
-        ttl = Number(ttl);
-        if (isFinite(ttl) && ttl > 0) {
-            return ttl * 1000;
-        }
-    }
-    return DEFAULT_SCRIPT_CACHE_TTL;
+    return ttlFromSetting(
+        () => $.read(SETTINGS_KEY),
+        'scriptCacheTtl',
+        DEFAULT_SCRIPT_CACHE_TTL,
+    );
 }
 
 const cache = new ResourceCache();
