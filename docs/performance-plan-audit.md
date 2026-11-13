@@ -40,8 +40,13 @@ The default cron stays commented out and the backend returns without doing any
 work if called with an empty schedule. The upstream `config/Surge-Beta.sgmodule`
 remains unchanged; only the rendered public copy is patched.
 
+A follow-up also disables all three module schedules by default and gives every
+prefetch field a nonempty default, so installation needs no target input. The
+cron defaults to `50 */6 * * *`, unused targets to `off`, and all task names
+remain commented out. See `fork-maintenance.md` for current behavior.
+
 A new parser/check validates the real rendered header, including quoted commas,
-optional defaults, duplicate declarations and unmatched quotes. Five regression
+optional defaults, duplicate declarations and unmatched quotes. Six regression
 tests run in publish-dist, including rejection of the old screenshot header.
 See https://manual.nssurge.com/profile/module.html (Parameter Tables).
 

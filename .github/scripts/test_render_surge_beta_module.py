@@ -27,15 +27,28 @@ class ModuleArguments(unittest.TestCase):
         source = (ROOT / 'config/Surge-Beta.sgmodule').read_bytes()
         updated = render(source, DEFAULT_PUBLIC_REPO)
         defaults = parse_module_arguments(updated.decode())
-        for name in ('prefetch_cron', 'prefetch_sub', 'prefetch_col'):
-            self.assertEqual(defaults[name], '')
+        self.assertEqual(defaults['prefetch_cron'], '50 */6 * * *')
+        for name in ('prefetch_sub', 'prefetch_col'):
+            self.assertEqual(defaults[name], 'off')
+        for name in ('sync', 'produce', 'prefetch'):
+            self.assertTrue(defaults[name].startswith('#'))
+        self.assertTrue(all(defaults.values()), 'No required module fields without defaults')
         self.assertTrue(defaults['prefetch'].startswith('#'))
         self.assertIn('https://ahuai6.github.io', defaults['cors'])
         assert_expected_diff(source, updated, DEFAULT_PUBLIC_REPO)
 
+    def test_check_rejects_any_default_active_schedule(self):
+        source = (ROOT / 'config/Surge-Beta.sgmodule').read_bytes()
+        updated = render(source, DEFAULT_PUBLIC_REPO)
+        for task in ('sync', 'produce', 'prefetch'):
+            with self.subTest(task=task), self.assertRaises(SystemExit):
+                broken = updated.replace((task + ':"# Sub-Store').encode(),
+                                         (task + ':"Sub-Store').encode())
+                assert_expected_diff(source, broken, DEFAULT_PUBLIC_REPO)
+
     def test_check_rejects_old_header_even_when_cron_is_commented_out(self):
         source = (ROOT / 'config/Surge-Beta.sgmodule').read_bytes()
-        updated = render(source, DEFAULT_PUBLIC_REPO).replace(b',prefetch_cron,', b',prefetch_cron:,')
+        updated = render(source, DEFAULT_PUBLIC_REPO).replace(b',prefetch_cron:"50 */6 * * *",', b',prefetch_cron:,')
         with self.assertRaises(SystemExit):
             assert_expected_diff(source, updated, DEFAULT_PUBLIC_REPO)
 

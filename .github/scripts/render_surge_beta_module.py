@@ -9,7 +9,9 @@ The published copy also appends the self-hosted frontend origin to the
 default `cors` argument, an opt-in prefetch cron that is off while
 `prefetch_cron` is empty, and a wider core script pattern so file routes run
 in sub-store-1. config/Surge-Beta.sgmodule in this repo stays identical to
-upstream. Restoring the artifact prefix, the upstream CORS list, the upstream
+upstream. All scheduled tasks default off; every prefetch parameter has a
+usable default so installation needs no user input. Restoring the sync default,
+artifact prefix, the upstream CORS list, the upstream
 core pattern, and removing the prefetch block must reproduce that file byte
 for byte.
 """
@@ -32,16 +34,22 @@ UPSTREAM_CORS_ORIGINS = (
 FORK_CORS_ORIGIN = "https://ahuai6.github.io"
 FORK_CORS_ORIGINS = f"{UPSTREAM_CORS_ORIGINS},{FORK_CORS_ORIGIN}"
 PREFETCH_ARGS = (
-    ',prefetch:"# Sub-Store Prefetch",prefetch_cron,prefetch_sub,prefetch_col,prefetch_platform:Surge'
+    ',prefetch:"# Sub-Store Prefetch",prefetch_cron:"50 */6 * * *",prefetch_sub:off,prefetch_col:off,prefetch_platform:Surge'
 )
 PREFETCH_DESC = (
     r"\n\n1️⃣2️⃣ prefetch_cron\n\n"
-    r"可选, 默认空, 不运行. 用来提前生成订阅, 写入输出缓存(resourceCacheTtl).\n"
+    r"全部参数均有默认值, 不需要预跑时无需填写或修改. 用来提前生成订阅, 写入输出缓存(resourceCacheTtl).\n"
     r"启用: 把 prefetch 从 # Sub-Store Prefetch 改成 Sub-Store Prefetch, "
-    r"并把 prefetch_cron 设为 Cron 表达式, 例如 50 */6 * * *.\n"
+    r"按需修改 prefetch_cron(默认 50 */6 * * *), 并设置要预热的订阅名.\n"
     r"prefetch_cron 为空时, 任务直接返回, 不生成订阅, 也不走同步配置.\n"
-    r"prefetch_sub / prefetch_col 是要预热的单条/组合订阅名(name), 多个用 , 连接.\n"
+    r"prefetch_sub / prefetch_col 默认 off(不选择), 仅填写需要的单条/组合订阅名(name), 多个用 , 连接.\n"
     r"prefetch_platform 默认 Surge. 过期后仍会完整重算, 哈希只在 TTL 内作为缓存键."
+)
+UPSTREAM_SYNC_DEFAULT = 'sync:"Sub-Store Sync"'
+FORK_SYNC_DEFAULT = 'sync:"# Sub-Store Sync"'
+SCHEDULE_DESC = (
+    r"\n\n定时同步、定时处理和预跑默认全部关闭, 无需填写 prefetch 参数即可安装."
+    r"按需启用时, 去掉对应任务名(sync / produce / prefetch)开头的 #, 再设置目标与时间."
 )
 PREFETCH_MARK = "sub-store-fork-prefetch"
 UPSTREAM_CORE_PATTERN = (
@@ -79,7 +87,7 @@ def render(source: bytes, public_repo: str) -> bytes:
         raise SystemExit(
             "rewritten module still references sub-store-org/Sub-Store"
         )
-    return add_prefetch(widen_core_pattern(updated))
+    return add_prefetch(widen_core_pattern(disable_sync_by_default(updated)))
 
 
 def _insert_on_prefixed_line(text: str, prefix: str, suffix: str) -> str:
@@ -93,8 +101,22 @@ def _insert_on_prefixed_line(text: str, prefix: str, suffix: str) -> str:
     raise SystemExit(f"missing line {prefix}")
 
 
+def disable_sync_by_default(updated: bytes) -> bytes:
+    text = updated.decode("utf-8")
+    if text.count(UPSTREAM_SYNC_DEFAULT) != 1:
+        raise SystemExit("upstream sync default anchor changed")
+    text = text.replace(UPSTREAM_SYNC_DEFAULT, FORK_SYNC_DEFAULT, 1)
+    return _insert_on_prefixed_line(text, "#!arguments-desc=", SCHEDULE_DESC).encode()
+
+
+def restore_sync_default(text: str) -> str:
+    if text.count(FORK_SYNC_DEFAULT) != 1:
+        raise SystemExit("fork disabled sync default missing")
+    return text.replace(FORK_SYNC_DEFAULT, UPSTREAM_SYNC_DEFAULT, 1).replace(SCHEDULE_DESC, "")
+
+
 def add_prefetch(updated: bytes) -> bytes:
-    """Add an opt-in prefetch cron. Empty prefetch_cron does not schedule it."""
+    """Add a disabled prefetch cron with defaults for every module parameter."""
     text = updated.decode("utf-8")
     if PREFETCH_MARK in text:
         return updated
@@ -242,12 +264,19 @@ def assert_prefetch_disabled_by_default(module_text: str) -> None:
     if 'prefetch:"# Sub-Store Prefetch"' not in module_text:
         raise SystemExit("prefetch name is not disabled by default")
     base = defaults
-    if any(defaults.get(key) != "" for key in ("prefetch_cron", "prefetch_sub", "prefetch_col")):
-        raise SystemExit("optional prefetch arguments must default to empty")
+    if not all(defaults.get(key) for key in ("prefetch_cron", "prefetch_sub", "prefetch_col", "prefetch_platform")):
+        raise SystemExit("prefetch parameters must have usable defaults")
+    if defaults["prefetch_sub"] != "off" or defaults["prefetch_col"] != "off":
+        raise SystemExit("prefetch targets must default to off")
+    substituted = _substitute(module_text, defaults)
+    for line in substituted.splitlines():
+        if not line.lstrip().startswith("#") and "type=cron" in line:
+            raise SystemExit("scheduled sync/produce/prefetch must default off: " + line)
     if active_prefetch_lines(_substitute(module_text, base)):
         raise SystemExit("default prefetch cron is active")
     named_but_empty = dict(base)
     named_but_empty["prefetch"] = "Sub-Store Prefetch"
+    named_but_empty["prefetch_cron"] = ""
     for line in active_prefetch_lines(_substitute(module_text, named_but_empty)):
         if 'cronexp=""' not in line:
             raise SystemExit(
@@ -265,11 +294,11 @@ def assert_prefetch_disabled_by_default(module_text: str) -> None:
 
 
 def assert_expected_diff(original: bytes, updated: bytes, public_repo: str) -> str:
-    """Fail unless reversing the prefix and CORS origin restores the source."""
+    """Reverse every supported fork patch to recover upstream byte for byte."""
     updated_text = updated.decode("utf-8")
     assert_prefetch_disabled_by_default(updated_text)
     assert_file_routes_on_core(updated_text)
-    comparable = restore_core_pattern(strip_prefetch(updated_text)).encode()
+    comparable = restore_sync_default(restore_core_pattern(strip_prefetch(updated_text))).encode()
     old = UPSTREAM_PREFIX.encode()
     new = artifact_prefix(public_repo).encode()
     # Replace the longer CORS list first. It starts with the upstream list.
@@ -278,7 +307,7 @@ def assert_expected_diff(original: bytes, updated: bytes, public_repo: str) -> s
     )
     if restored != original:
         raise SystemExit(
-            "diff is not limited to the artifact URL prefix, the fork CORS origin, the core file pattern, and the prefetch cron"
+            "diff is not limited to the artifact URL prefix, the fork CORS origin, the core file pattern, disabled schedule defaults, and the prefetch cron"
         )
 
     # The URL/CORS check ignores the prefetch block. strip_prefetch removes it.
@@ -321,7 +350,7 @@ def main() -> None:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Require the diff to be only the artifact URL prefix and fork CORS origin (always enforced).",
+        help="Require reversible fork-only module changes (always enforced).",
     )
     args = parser.parse_args()
 

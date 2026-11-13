@@ -6,7 +6,7 @@ import path from 'path';
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
 
-import { prefetchDecision } from '@/utils/prefetch-cron';
+import { prefetchDecision, prefetchNames } from '@/utils/prefetch-cron';
 
 function findRepoRoot() {
     for (const dir of [process.cwd(), path.resolve(process.cwd(), '..')]) {
@@ -69,7 +69,16 @@ describe('Surge prefetch cron', function () {
         ).to.equal('Surge');
     });
 
-    it('publishes a prefetch cron that stays off until prefetch_cron is set', function () {
+    it('needs no target input by default and preserves explicit encoded subscription names', function () {
+        expect(prefetchNames('off')).to.deep.equal([]);
+        expect(prefetchNames(' OFF, ,off，')).to.deep.equal([]);
+        expect(prefetchNames()).to.deep.equal([]);
+        expect(prefetchNames('sub-a,off,sub%20b')).to.deep.equal(['sub-a', 'sub b']);
+        expect(prefetchNames('%6Fff')).to.deep.equal(['off']);
+        expect(prefetchDecision({ prefetch: '1', cron: '' }).handled).to.equal(true);
+    });
+
+    it('publishes optional prefetch defaults and leaves scheduled tasks disabled', function () {
         const root = findRepoRoot();
         const output = path.join(os.tmpdir(), `surge-beta-prefetch-${process.pid}.sgmodule`);
         execFileSync(
@@ -83,7 +92,8 @@ describe('Surge prefetch cron', function () {
             { cwd: root },
         );
         const text = fs.readFileSync(output, 'utf8');
-        expect(text).to.include(',prefetch_cron,prefetch_sub,prefetch_col,');
+        expect(text).to.include(',prefetch_cron:"50 */6 * * *",prefetch_sub:off,prefetch_col:off,');
+        expect(text).to.include('sync:"# Sub-Store Sync"');
         expect(text).to.include('prefetch:"# Sub-Store Prefetch"');
         expect(text).to.not.include('sub-store-org/Sub-Store');
         const defaults = {

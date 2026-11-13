@@ -163,6 +163,11 @@ ${RELEASE_MODULE_URL}
 Script paths inside the module use \`releases/latest/download\` on **this** repo.
 Compared with [upstream's beta module](https://raw.githubusercontent.com/sub-store-org/Sub-Store/master/config/Surge-Beta.sgmodule), those artifact URLs differ and the default \`cors\` list also includes \`https://ahuai6.github.io\`.
 
+Scheduled Gist sync, produce and prefetch tasks default to off. Installation
+requires no prefetch input: all parameters have defaults; unused prefetch target
+lists stay \`off\`. Existing saved module settings may persist on update, so
+check task names or reinstall to apply new defaults.
+
 ## Frontend
 
 https://ahuai6.github.io/Sub-Store-Fork-Dist/
