@@ -29,7 +29,7 @@ UPSTREAM_PREFIX = (
 )
 DEFAULT_PUBLIC_REPO = "ahuai6/Sub-Store-Fork-Dist"
 UPSTREAM_CORS_ORIGINS = (
-    "https://sub-store.vercel.app,http://substore.stash,https://substore.stash"
+    "https://sub-store.vercel.app,http://substore.stash,https://substore.stash,https://sub.xream.eu.org"
 )
 FORK_CORS_ORIGIN = "https://ahuai6.github.io"
 FORK_CORS_ORIGINS = f"{UPSTREAM_CORS_ORIGINS},{FORK_CORS_ORIGIN}"

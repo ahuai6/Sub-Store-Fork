@@ -75,6 +75,9 @@ describe('CORS allowlist policy', function () {
         expect(isOriginAllowed(policy, 'https://substore.stash')).to.equal(
             true,
         );
+        expect(isOriginAllowed(policy, 'https://sub.xream.eu.org')).to.equal(
+            true,
+        );
         expect(isOriginAllowed(policy, 'https://evil.example')).to.equal(false);
     });
 

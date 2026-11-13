@@ -4,7 +4,7 @@ export const NODE_CORS_ALLOWED_ORIGINS_ENV = 'SUB_STORE_CORS_ALLOWED_ORIGINS';
 // Fork: the GitHub Pages origin has no path. Reapplied by
 // .github/scripts/apply-fork-frontend.mjs after upstream merges.
 export const NON_NODE_CORS_DEFAULT =
-    'https://sub-store.vercel.app,http://substore.stash,https://substore.stash,https://ahuai6.github.io';
+    'https://sub-store.vercel.app,http://substore.stash,https://substore.stash,https://sub.xream.eu.org,https://ahuai6.github.io';
 export const NODE_CORS_DEFAULT = NON_NODE_CORS_DEFAULT;
 export const CORS_ARGUMENT_KEY = 'cors';
 

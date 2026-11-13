@@ -23,13 +23,14 @@ const REDIRECT_FILE = 'backend/src/restful/miscs.js';
 const CORS_FILE = 'backend/src/utils/cors.js';
 
 const UPSTREAM_REDIRECT = 'https://sub-store.vercel.app/';
+// Upstream 2.44.11 points `/` at this template instead of the Vercel URL.
+const UPSTREAM_REDIRECT_TEMPLATE = '`${DEFAULT_FRONTEND_URL}/`';
 export const FORK_REDIRECT = 'https://ahuai6.github.io/Sub-Store-Fork-Dist/';
 const REDIRECT_MARKER = "res.set('location',";
 
 const UPSTREAM_ORIGINS =
     'https://sub-store.vercel.app,http://substore.stash,https://substore.stash';
 const FORK_ORIGIN = 'https://ahuai6.github.io';
-const FORK_ORIGINS = `${UPSTREAM_ORIGINS},${FORK_ORIGIN}`;
 
 const failures = [];
 
@@ -63,17 +64,26 @@ function patchRedirect() {
         console.log(`${REDIRECT_FILE} already redirects to ${FORK_REDIRECT}`);
         return;
     }
-    if (!line.includes(UPSTREAM_REDIRECT)) {
+    let updated = null;
+    if (line.includes(UPSTREAM_REDIRECT)) {
+        updated = line.replace(UPSTREAM_REDIRECT, FORK_REDIRECT);
+    } else if (line.includes(UPSTREAM_REDIRECT_TEMPLATE)) {
+        updated = line.replace(
+            UPSTREAM_REDIRECT_TEMPLATE,
+            `'${FORK_REDIRECT}'`,
+        );
+    }
+    if (updated == null) {
         fail(
-            `${REDIRECT_FILE} redirect is neither ${UPSTREAM_REDIRECT} nor ${FORK_REDIRECT}.`,
+            `${REDIRECT_FILE} redirect is neither ${UPSTREAM_REDIRECT}, ${UPSTREAM_REDIRECT_TEMPLATE}, nor ${FORK_REDIRECT}.`,
         );
         return;
     }
     if (checkOnly) {
-        fail(`${REDIRECT_FILE} still redirects to ${UPSTREAM_REDIRECT}.`);
+        fail(`${REDIRECT_FILE} still uses an upstream redirect.`);
         return;
     }
-    lines[index] = line.replace(UPSTREAM_REDIRECT, FORK_REDIRECT);
+    lines[index] = updated;
     write(REDIRECT_FILE, lines.join('\n'));
     console.log(`updated ${REDIRECT_FILE}`);
 }
@@ -91,25 +101,27 @@ function patchCors() {
     }
     const current = match[1];
     const origins = current.split(',');
-    if (
-        current.startsWith(UPSTREAM_ORIGINS) &&
-        origins.includes(FORK_ORIGIN)
-    ) {
-        console.log(`${CORS_FILE} already allows ${FORK_ORIGIN}`);
+    const keepsUpstreamPrefix =
+        current === UPSTREAM_ORIGINS ||
+        current.startsWith(`${UPSTREAM_ORIGINS},`);
+    if (!keepsUpstreamPrefix) {
+        fail(
+            `${CORS_FILE} default origins are '${current}', which does not start with '${UPSTREAM_ORIGINS}'.`,
+        );
         return;
     }
-    if (current !== UPSTREAM_ORIGINS) {
-        fail(
-            `${CORS_FILE} default origins are '${current}', not '${UPSTREAM_ORIGINS}' or '${FORK_ORIGINS}'.`,
-        );
+    if (origins.includes(FORK_ORIGIN)) {
+        console.log(`${CORS_FILE} already allows ${FORK_ORIGIN}`);
         return;
     }
     if (checkOnly) {
         fail(`${CORS_FILE} does not allow ${FORK_ORIGIN}.`);
         return;
     }
-    const needle = `export const NON_NODE_CORS_DEFAULT =\n    '${UPSTREAM_ORIGINS}';`;
-    const replacement = `export const NON_NODE_CORS_DEFAULT =\n    '${FORK_ORIGINS}';`;
+    // Keep origins upstream added (for example https://sub.xream.eu.org) and
+    // append the fork origin. Replacing the whole list would drop them.
+    const needle = `export const NON_NODE_CORS_DEFAULT =\n    '${current}';`;
+    const replacement = `export const NON_NODE_CORS_DEFAULT =\n    '${current},${FORK_ORIGIN}';`;
     if (!text.includes(needle)) {
         fail(`${CORS_FILE} replacement anchor was not found.`);
         return;
