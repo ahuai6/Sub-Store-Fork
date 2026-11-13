@@ -3,6 +3,8 @@
 本仓库的职责是跟随 Sub-Store 上游，同时保留 Surge iOS 使用场景需要的修改。
 不要把一次无冲突 Git 合并等同于兼容性验证完成。
 
+给新 agent 的完整交接在根目录 `AGENTS.md`。本文保留同步、发布和冲突处理的操作细节。两处不一致时，以 `AGENTS.md` 和当前代码为准，并改掉过时的一边。
+
 ## 仓库与发布关系
 
 | 位置 | 职责 |
@@ -87,8 +89,7 @@ git 会以 `fatal: empty ident name` 立刻失败，并且列不出冲突文件�
 
 同步 PR 合入 `main` 时必须使用 merge commit。规则见下文「收到上游同步 PR 后的处理流程」。
 
-手动 workflow_dispatch 由用户操作。CI 内既有的自动调用属于工作流逻辑，不能被误当作
-助手可以自行点击 Run 的授权。用户把同步 PR 或失败链接发来后，可以在对话内继续处理。
+Dist 上的手动 Run 由用户操作。有权限的 Agent 可以用 `workflow_dispatch` 触发 Dist 的工作流；没有权限就请用户点 Run。不要触发本私有仓库里的同名工作流，账单会在开始前拒绝，而且发布不再读这里的 `PUBLIC_DIST_TOKEN`。CI 内部的自动 dispatch 是工作流逻辑，不能当成可以在本仓库加回 push、pull_request 或 schedule 的授权。用户把同步 PR 或失败链接发来后，可以在对话内继续处理。
 
 ## Dist 上的 `FORK_REPO_TOKEN`
 
