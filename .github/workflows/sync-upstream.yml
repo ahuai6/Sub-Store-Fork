@@ -95,18 +95,37 @@ jobs:
         run: |
           set -euo pipefail
           git checkout main
+          # Runners have no committer identity. Git 2.56 refuses `git merge`
+          # before it writes the index (`fatal: empty ident name`), and
+          # `git diff --diff-filter=U` is then empty. The conflict PR used to
+          # publish that blank list. Set the same bot identity used for commits.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           before=$(git rev-parse HEAD)
           set +e
-          git merge --no-edit upstream/master
+          git merge --no-edit upstream/master > /tmp/merge-output.txt 2>&1
           code=$?
           set -e
+          cat /tmp/merge-output.txt
           if [ "$code" -ne 0 ]; then
-            git diff --name-only --diff-filter=U > /tmp/conflict-files || true
+            # One path per unmerged index stage. This stays empty when merge
+            # exits before recording conflicts; the PR/issue body says so.
+            git ls-files -u --format='%(path)' | sort -u > /tmp/conflict-files || true
+            if [ -s /tmp/conflict-files ]; then
+              echo "conflicts=true" >> "$GITHUB_OUTPUT"
+              echo "Unmerged files:"
+              cat /tmp/conflict-files
+            else
+              echo "conflicts=false" >> "$GITHUB_OUTPUT"
+              cp /tmp/merge-output.txt /tmp/merge-error.txt
+              echo "Merge failed before any unmerged paths were recorded."
+            fi
             git merge --abort || true
             echo "clean=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "clean=true" >> "$GITHUB_OUTPUT"
+          echo "conflicts=false" >> "$GITHUB_OUTPUT"
           echo "before=${before}" >> "$GITHUB_OUTPUT"
           echo "after=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -223,6 +242,27 @@ jobs:
           set -euo pipefail
           # The PR head is upstream/master itself. Resolving happens on the PR.
           # Do not force this branch if someone already pushed a resolution.
+          if [ "${{ steps.merge.outputs.conflicts }}" != "true" ]; then
+            {
+              echo "Automatic merge of \`sub-store-org/Sub-Store\` \`master\` into \`main\` failed before any conflicts were recorded. Nothing was force-pushed, and \`sync/upstream\` was not updated."
+              echo
+              echo "\`git merge\` output:"
+              echo
+              echo '```'
+              cat /tmp/merge-error.txt
+              echo '```'
+              echo
+              echo "Upstream commit: \`$(git rev-parse upstream/master)\`"
+            } > /tmp/sync-pr-body.md
+            title="sync: upstream merge failed before conflicts were recorded"
+            existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title ${title}" --json number --jq '.[0].number')
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/sync-pr-body.md
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/sync-pr-body.md
+            fi
+            exit 1
+          fi
           if ! git push origin upstream/master:refs/heads/sync/upstream; then
             body="Could not update \`sync/upstream\` (it is not a fast-forward). Upstream commit: $(git rev-parse upstream/master). Conflicting files:"$'\n\n```\n'"$(cat /tmp/conflict-files)"$'\n```'$'\n\n'"Keep the fork redirect in \`backend/src/restful/miscs.js\` (\`https://ahuai6.github.io/Sub-Store-Fork-Dist/\`) and \`https://ahuai6.github.io\` on \`NON_NODE_CORS_DEFAULT\` in \`backend/src/utils/cors.js\`. \`node .github/scripts/apply-fork-frontend.mjs\` reapplies both when the anchors still match. Nothing was force-pushed."
             title="sync: upstream merge conflicts need attention"
