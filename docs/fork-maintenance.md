@@ -85,6 +85,8 @@ git 会以 `fatal: empty ident name` 立刻失败，并且列不出冲突文件�
    `publish-dist`。其他 main 提交由 publish-dist 的 schedule 在 SHA 变化后发布。
    不要把“每日取上游”和“每日必须发布”混成一件事。
 
+同步 PR 合入 `main` 时必须使用 merge commit。规则见下文「收到上游同步 PR 后的处理流程」。
+
 手动 workflow_dispatch 由用户操作。CI 内既有的自动调用属于工作流逻辑，不能被误当作
 助手可以自行点击 Run 的授权。用户把同步 PR 或失败链接发来后，可以在对话内继续处理。
 
@@ -140,6 +142,9 @@ Metadata 的 Read 是 fine-grained PAT 自带的，不用改。这个 token 不�
    PR 的分支或 head SHA。通过后，该 SHA 上出现提交状态
    `Sub-Store-Fork-Dist/verify`。确认符合既定约束后可直接合并；用户已授权常规
    PR 无需逐个批准。确需用户作决定的重要取舍再确认。保留分支。
+   上游同步 PR（`sync/*`，或任何并入上游提交的 PR）必须用 “Create a merge commit”
+   合并，不要 squash，也不要 rebase。否则上游 ancestry 丢失，这些提交不再是
+   `main` 的祖先，每日同步会在相同文件上再次冲突。
 7. 合并后私有 main 的 SHA 变了。Dist 的 publish-dist schedule 会在数小时内发布；
    要马上发布就手动 Run `publish-dist`。核对公开 module/geo 内容和 release 的
    source SHA。需要前端时手动 Run `publish-frontend`，并说明原因。

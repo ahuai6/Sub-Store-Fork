@@ -10,6 +10,7 @@
 Dist 工作流和公开版本元数据为准。
 
 - 从当前 `origin/main` 开始；保留上游来源和 Git 历史。
+- 上游同步 PR（`sync/*`，或任何并入上游提交的 PR）必须用 “Create a merge commit” 合并，不要 squash，也不要 rebase。否则上游 ancestry 丢失，每日同步会在相同文件上再次冲突。
 - 源文件不删；保留全部 producers、parsers（含 Loon/QX）和 lodash。
 - 不 force-push，不删除分支，不添加 upload-artifact。
 - 不在本仓库恢复 Actions 的 push、pull_request 或 schedule。自动任务只放在 Dist。
