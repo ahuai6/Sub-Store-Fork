@@ -1,13 +1,18 @@
 # Sub-Store-Fork 协作约定
 
 这是 `sub-store-org/Sub-Store` 的持续同步与二次开发仓库，不是一次性改版。
-先读 `docs/fork-maintenance.md` 和当前 `.github/workflows/sync-upstream.yml`，
-再处理上游同步、模块发布或运行时改动。`docs/performance-plan-audit.md` 是
-2026-11-13 的历史核对表，部署状态以实际工作流和公开版本元数据为准。
+先读 `docs/fork-maintenance.md`。本私有仓库的 GitHub Actions 已不能自动启动
+（私有仓库 Actions 账单停止，任务在开始前被拒绝）。构建、发布、每日上游同步
+和 PR 验证在公开仓库 `ahuai6/Sub-Store-Fork-Dist` 的 `.github/workflows/`
+里运行，并在运行时 checkout 本仓库。本仓库的 workflow 文件保留，只剩手动
+`workflow_dispatch`，不要把 push、pull_request 或 schedule 加回来。
+`docs/performance-plan-audit.md` 是 2026-11-13 的历史核对表，部署状态以
+Dist 工作流和公开版本元数据为准。
 
 - 从当前 `origin/main` 开始；保留上游来源和 Git 历史。
 - 源文件不删；保留全部 producers、parsers（含 Loon/QX）和 lodash。
 - 不 force-push，不删除分支，不添加 upload-artifact。
+- 不在本仓库恢复 Actions 的 push、pull_request 或 schedule。自动任务只放在 Dist。
 - 用户已授权：常规维护、上游同步和修复 PR，在符合既定约束且检查通过后可直接合并，
   不必逐个请求批准。确实需要用户作决定的重要取舍再确认。手动触发的工作流仍由用户点 Run。
 - 所有缓存必须受相应全局 TTL 约束；指纹只是 TTL 内的键，不得成为永久跳过重测的理由。

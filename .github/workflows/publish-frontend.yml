@@ -15,10 +15,14 @@ name: publish-frontend
 #
 # The site directory is pushed from this job. Nothing is uploaded as an
 # Actions artifact.
+#
+# The daily run moved to the public repo. This private repo's Actions
+# spending limit refuses jobs before they start. The workflow that builds
+# and deploys gh-pages is:
+# https://github.com/ahuai6/Sub-Store-Fork-Dist/blob/main/.github/workflows/publish-frontend.yml
+# It checks this repo out and runs the scripts in this file. Keep this file.
+# Do not add a schedule or push trigger here. Dist's schedule is 05:23 UTC.
 on:
-  schedule:
-    # Daily, after sync-upstream (04:17 UTC), on its own minute.
-    - cron: "23 5 * * *"
   workflow_dispatch:
     inputs:
       force:

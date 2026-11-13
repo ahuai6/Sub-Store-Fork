@@ -8,6 +8,13 @@ name: publish-dist
 # Upstream's .github/workflows/main.yml is left untouched. It runs on `master`
 # and uploads to this repo's Releases, which are not public while the source
 # repo is private.
+#
+# Automatic runs moved to the public repo. This private repo's Actions
+# spending limit refuses jobs before they start. The workflow that builds
+# and publishes is:
+# https://github.com/ahuai6/Sub-Store-Fork-Dist/blob/main/.github/workflows/publish-dist.yml
+# It checks this repo out and runs the scripts in this file. Keep this file.
+# Do not add push, pull_request, or schedule triggers here.
 on:
   workflow_dispatch:
     inputs:
@@ -15,26 +22,6 @@ on:
         description: Public artifact repository (owner/name)
         default: ahuai6/Sub-Store-Fork-Dist
         type: string
-  push:
-    branches:
-      - main
-    paths:
-      - "backend/**"
-      - "scripts/check/geo.js"
-      - "scripts/check/GEO-*"
-      - "config/Surge-Beta.sgmodule"
-      - ".github/workflows/publish-dist.yml"
-      - ".github/scripts/**"
-      - ".node-version"
-  pull_request:
-    paths:
-      - "backend/**"
-      - "scripts/check/geo.js"
-      - "scripts/check/GEO-*"
-      - "config/Surge-Beta.sgmodule"
-      - ".github/workflows/publish-dist.yml"
-      - ".github/scripts/**"
-      - ".node-version"
 
 permissions:
   contents: read
