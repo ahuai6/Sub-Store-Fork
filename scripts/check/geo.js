@@ -2,21 +2,20 @@
  * Optimized copy of
  * https://github.com/xream/scripts/blob/main/surge/modules/sub-store-scripts/check/geo.js
  *
- * Upstream license: the xream/scripts repository LICENSE is GPL-3.0. This
- * file has no SPDX header of its own. The repository README also forbids
- * republication and says the contents must be deleted within 24 hours.
- * Those extra terms conflict with GPL-3.0, so redistribution is not clearly
- * allowed. This copy stays in the private source repository and is not
- * uploaded to Sub-Store-Fork-Dist.
+ * Modified for ahuai6/Sub-Store-Fork on 2026-11-13.
+ * The upstream repository LICENSE is GPL-3.0; its README also contains
+ * additional restrictions. See GEO-NOTICE.md and GEO-LICENSE.txt for the
+ * upstream attribution, terms and changes. Published at the fork owner's
+ * explicit request; this file is separate from the backend AGPL license.
  *
- * Arguments, defaults, and output match the original unless time_budget is
- * set. Changes:
+ * Arguments and output remain compatible. two_phase and dedup_target are
+ * opt-in; time_budget is milliseconds (default safety ceiling: 880s). Changes:
  * - cache writes are flushed in batches and once at the end
  * - the cache key is geo: plus MD5 of the original key material
  * - the regex and the format template are compiled once
  * - concurrency above Surge's 20 $httpClient limit is capped at 20
  * - optional time_budget (milliseconds) is off by default. When set, no new
- *   node is started after the budget. Nodes already in flight finish. Nodes
+ *   node is started after the budget. Requests are capped to remaining time. Nodes
  *   that never started keep their original name and are not cached as failed.
  *
  * Cache entries expire with settings.scriptCacheTtl (seconds), otherwise
@@ -84,12 +83,17 @@ async function operator(proxies = [], targetPlatform, context) {
   const incompatibleEnabled = $arguments.incompatible
   const includeUnsupportedProxy = $arguments.include_unsupported_proxy
   const geoEnabled = $arguments.geo
-  const cacheEnabled = $arguments.cache
+  const cacheEnabled = $arguments.cache && scriptTtlMs() > 0
+  const twoPhase = enabled($arguments.two_phase)
+  const targetDedup = enabled($arguments.dedup_target)
+  const requests = new Map() // pending promises only, scoped to this invocation
+  const reachabilityUrl = $arguments.reachability_url || 'http://www.gstatic.com/generate_204'
+  const reachabilityTimeout = Math.min(5000, positive($arguments.reachability_timeout, 1500))
   const cache = scriptResourceCache
   const method = $arguments.method || 'get'
   const target = isLoon ? 'Loon' : isEgern ? 'Egern' : isSurge ? 'Surge' : undefined
   let concurrency = parseInt($arguments.concurrency || 10)
-  if (Number.isFinite(concurrency) && concurrency > 20) concurrency = 20
+  concurrency = Math.min(20, Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 10)
   const rawBudget = $arguments.time_budget
   let timeBudget = 0
   if (
@@ -102,7 +106,7 @@ async function operator(proxies = [], targetPlatform, context) {
     const parsedBudget = Number(rawBudget)
     if (Number.isFinite(parsedBudget) && parsedBudget > 0) timeBudget = parsedBudget
   }
-  const deadline = timeBudget ? Date.now() + timeBudget : 0
+  const deadline = Date.now() + Math.min(timeBudget || 880000, 880000)
   const compiledRegex = compileRegex(regex)
   let compiledFormat = null
   try {
@@ -157,6 +161,8 @@ async function operator(proxies = [], targetPlatform, context) {
         regex: regex || '',
         internal: internal ? 1 : 0,
         method,
+        ...(twoPhase ? { twoPhase, reachabilityUrl, reachabilityTimeout } : {}),
+        ...(targetDedup ? { targetDedup } : {}),
       },
     }
   }
@@ -219,7 +225,16 @@ async function operator(proxies = [], targetPlatform, context) {
           }
         }
         const startedAt = Date.now()
-        const res = await http({
+        if (twoPhase) {
+          const reachable = await request(proxy, {
+            method: 'get', url: reachabilityUrl, timeout: reachabilityTimeout, retries: 0,
+            'policy-descriptor': node, node,
+          }, 'reachability')
+          const status = Number(reachable.status || reachable.statusCode || 200)
+          if (status < 200 || status >= 400) throw new Error(`Reachability status: ${status}`)
+        }
+        if (Date.now() >= deadline) throw budgetError()
+        const res = await request(proxy, {
           method,
           headers: {
             'User-Agent':
@@ -228,7 +243,7 @@ async function operator(proxies = [], targetPlatform, context) {
           url,
           'policy-descriptor': node,
           node,
-        })
+        }, 'geo')
         let api = String(lodash_get(res, 'body'))
         const status = parseInt(res.status || res.statusCode || 200)
         const latency = `${Date.now() - startedAt}`
@@ -265,6 +280,10 @@ async function operator(proxies = [], targetPlatform, context) {
       }
     } catch (e) {
       $.error(`[${proxy.name}] ${e.message ?? e}`)
+      if (e.budgetExceeded) {
+        if (finishShared) finishShared(null)
+        return
+      }
       if (cacheEnabled) {
         $.info(`[${proxy.name}] 设置失败缓存`)
         remember(id, {}, proxy, finishShared)
@@ -282,7 +301,9 @@ async function operator(proxies = [], targetPlatform, context) {
     const filtered = Object.fromEntries(
       Object.entries(proxy).filter(([key]) => !/^(collectionName|subName|id|_.*)$/i.test(key))
     )
-    const canonical = `geo:${url}:${format}:${regex}:${internal}:${JSON.stringify(filtered)}`
+    const mode = twoPhase || targetDedup || method !== 'get'
+      ? `:${twoPhase}:${targetDedup}:${reachabilityUrl}:${reachabilityTimeout}:${method}` : ''
+    const canonical = `geo:${url}:${format}:${regex}:${internal}:${JSON.stringify(filtered)}${mode}`
     let digest = canonical
     try {
       if (typeof ProxyUtils.hex_md5 === 'function') digest = ProxyUtils.hex_md5(canonical)
@@ -330,32 +351,65 @@ async function operator(proxies = [], targetPlatform, context) {
     try {
       const settings = $.read('settings') || {}
       const ttl = Number(settings.scriptCacheTtl)
-      if (Number.isFinite(ttl) && ttl > 0) return ttl * 1000
+      if (Object.prototype.hasOwnProperty.call(settings, 'scriptCacheTtl')) {
+        return Number.isFinite(ttl) && ttl > 0 ? ttl * 1000 : 0
+      }
     } catch (e) {}
     return fallback
   }
 
+  function enabled(value) {
+    return value === true || value === 1 || /^(true|1|yes|on)$/i.test(String(value))
+  }
+
+  function positive(value, fallback) {
+    const n = Number(value)
+    return Number.isFinite(n) && n > 0 ? n : fallback
+  }
+
+  function budgetError() {
+    const error = new Error('Check time budget exhausted')
+    error.budgetExceeded = true
+    return error
+  }
+
+  function request(proxy, options, phase) {
+    // Default: identical routing identity, excluding display metadata. Wider
+    // server+port sharing is explicitly opt-in: credentials can select exits.
+    const identity = Object.fromEntries(Object.entries(proxy)
+      .filter(([key]) => !/^(name|collectionName|subName|id|_.*)$/i.test(key))
+      .sort(([a], [b]) => a.localeCompare(b)))
+    const target = targetDedup ? { server: proxy.server, port: proxy.port, type: proxy.type } : identity
+    const key = JSON.stringify([phase, target])
+    if (requests.has(key)) return requests.get(key)
+    const pending = http(options).finally(() => requests.delete(key))
+    requests.set(key, pending)
+    return pending
+  }
+
   async function http(opt = {}) {
     const METHOD = opt.method || 'get'
-    const TIMEOUT = parseFloat(opt.timeout || $arguments.timeout || 5000)
+    const TIMEOUT = positive(opt.timeout || $arguments.timeout, 5000)
     const RETRIES = parseFloat(opt.retries ?? $arguments.retries ?? 1)
     const RETRY_DELAY = parseFloat(opt.retry_delay ?? $arguments.retry_delay ?? 1000)
 
     let count = 0
     const fn = async () => {
       try {
+        if (Date.now() >= deadline) throw budgetError()
+        const attemptTimeout = Math.max(1, Math.min(TIMEOUT, deadline - Date.now()))
         if (surge_http_api_enabled) {
           const res = await $.http.post({
             url: `${surge_http_api_protocol}://${surge_http_api}/v1/scripting/evaluate`,
-            timeout: TIMEOUT,
+            timeout: attemptTimeout,
             headers: { 'x-key': surge_http_api_key, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               script_text: `$httpClient.get(${JSON.stringify({
                 ...opt,
-                timeout: TIMEOUT / 1000,
+                timeout: attemptTimeout / 1000,
               })}, (error, response, data) => {  $done({ error, response, data }) }) `,
               mock_type: 'cron',
-              timeout: TIMEOUT / 1000,
+              timeout: attemptTimeout / 1000,
             }),
           })
           let body = String(lodash_get(res, 'body'))
@@ -365,15 +419,17 @@ async function operator(proxies = [], targetPlatform, context) {
           const error = lodash_get(body, 'result.error')
           if (error) throw new Error(error)
           const data = String(lodash_get(body, 'result.data'))
-          const response = String(lodash_get(body, 'result.response'))
+          const response = lodash_get(body, 'result.response') || {}
           return { ...response, body: data }
         } else {
-          return await $.http[METHOD]({ ...opt, timeout: TIMEOUT })
+          return await $.http[METHOD]({ ...opt, timeout: attemptTimeout })
         }
       } catch (e) {
+        if (e.budgetExceeded || Date.now() >= deadline) throw budgetError()
         if (count < RETRIES) {
           count++
           const delay = RETRY_DELAY * count
+          if (Date.now() + delay >= deadline) throw budgetError()
           await $.wait(delay)
           return await fn()
         } else {

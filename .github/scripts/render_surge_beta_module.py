@@ -32,7 +32,7 @@ UPSTREAM_CORS_ORIGINS = (
 FORK_CORS_ORIGIN = "https://ahuai6.github.io"
 FORK_CORS_ORIGINS = f"{UPSTREAM_CORS_ORIGINS},{FORK_CORS_ORIGIN}"
 PREFETCH_ARGS = (
-    ',prefetch:"# Sub-Store Prefetch",prefetch_cron:,prefetch_sub:,prefetch_col:,prefetch_platform:Surge'
+    ',prefetch:"# Sub-Store Prefetch",prefetch_cron,prefetch_sub,prefetch_col,prefetch_platform:Surge'
 )
 PREFETCH_DESC = (
     r"\n\n1️⃣2️⃣ prefetch_cron\n\n"
@@ -207,21 +207,43 @@ def active_prefetch_lines(text: str) -> list[str]:
     return found
 
 
+def parse_module_arguments(module_text: str) -> dict[str, str]:
+    """Surge defaults are optional: use a bare name, never a trailing colon.
+
+    https://manual.nssurge.com/profile/module.html#parameter-tables
+    Commas in quoted defaults (e.g. cors) must stay within one declaration.
+    """
+    lines = [line for line in module_text.splitlines() if line.startswith("#!arguments=")]
+    if len(lines) != 1:
+        raise SystemExit("expected one #!arguments header")
+    header = lines[0].partition("=")[2]
+    if header.count('"') % 2:
+        raise SystemExit("unbalanced quotes in module arguments")
+    result = {}
+    for field in re.split(r',(?=(?:[^"\n]*"[^"\n]*")*[^"\n]*$)', header):
+        match = re.fullmatch(r'([A-Za-z0-9_]+)(?::("[^"\n]*"|[^",\n]+))?', field.strip())
+        if not match:
+            raise SystemExit(f"invalid module argument declaration: {field}")
+        name, default = match.groups()
+        if name in result:
+            raise SystemExit(f"duplicate module argument: {name}")
+        value = (default or '').strip()
+        if default is not None and not value:
+            raise SystemExit(f"empty bare module argument default: {field}")
+        result[name] = value[1:-1] if value.startswith('"') else value
+    return result
+
+
 def assert_prefetch_disabled_by_default(module_text: str) -> None:
     """Empty prefetch_cron must not leave a scheduled prefetch cron."""
-    if "prefetch_cron:" not in module_text:
+    defaults = parse_module_arguments(module_text)
+    if "prefetch_cron" not in defaults:
         raise SystemExit("prefetch_cron argument missing")
     if 'prefetch:"# Sub-Store Prefetch"' not in module_text:
         raise SystemExit("prefetch name is not disabled by default")
-    base = {
-        "prefetch": "# Sub-Store Prefetch",
-        "prefetch_cron": "",
-        "prefetch_sub": "",
-        "prefetch_col": "",
-        "prefetch_platform": "Surge",
-        "timeout": "900",
-        "engine": "auto",
-    }
+    base = defaults
+    if any(defaults.get(key) != "" for key in ("prefetch_cron", "prefetch_sub", "prefetch_col")):
+        raise SystemExit("optional prefetch arguments must default to empty")
     if active_prefetch_lines(_substitute(module_text, base)):
         raise SystemExit("default prefetch cron is active")
     named_but_empty = dict(base)

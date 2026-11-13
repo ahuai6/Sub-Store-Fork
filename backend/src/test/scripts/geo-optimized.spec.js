@@ -375,6 +375,48 @@ describe('optimized geo.js', function () {
         checkCache.revokeAll();
     });
 
+    it('shares concurrent target requests only when opted in and releases them after the run', async function () {
+        const input = [
+            { name: 'one', type: 'ss', server: 'a.example', port: 1, password: 'one' },
+            { name: 'two', type: 'ss', server: 'a.example', port: 1, password: 'two' },
+        ];
+        const env = createEnv({ delayMs: 5 });
+        await runOptimized(clone(input), { dedup_target: true }, env);
+        expect(env.httpCalls).to.have.length(1);
+        await runOptimized(clone(input), { dedup_target: true }, env);
+        expect(env.httpCalls).to.have.length(2);
+        const safe = createEnv({ delayMs: 5 });
+        await runOptimized(clone(input), {}, safe);
+        expect(safe.httpCalls).to.have.length(2);
+    });
+
+    it('probes first with short timeout and only does geo on reachable nodes', async function () {
+        const env = createEnv();
+        const input = nodes().slice(0, 3);
+        const result = await runOptimized(clone(input), { two_phase: true, geo: true, retries: 0 }, env);
+        expect(env.httpCalls.filter(c => c.url.includes('generate_204'))).to.have.length(3);
+        expect(env.httpCalls.filter(c => c.url.includes('ip-api.com'))).to.have.length(2);
+        expect(env.httpCalls.filter(c => c.url.includes('generate_204')).every(c => c.timeout <= 1500)).to.equal(true);
+        expect(result[2]._geo).to.equal(undefined);
+    });
+
+    it('does not launch geo or cache a failure when the budget ends during phase one', async function () {
+        const env = createEnv({ delayMs: 25, deferPersist: true });
+        const result = await runOptimized(clone(nodes().slice(0, 1)),
+            { two_phase: true, cache: true, geo: true, time_budget: 10 }, env);
+        expect(env.httpCalls).to.have.length(1);
+        expect(result[0].name).to.equal('ok-a');
+        expect(env.cache.resourceCache).to.deep.equal({});
+    });
+
+    it('disables every geo cache path at explicit scriptCacheTtl zero', async function () {
+        const env = createEnv({ settings: { scriptCacheTtl: 0 } });
+        await runOptimized(clone(nodes().slice(0, 1)), { cache: true }, env);
+        await runOptimized(clone(nodes().slice(0, 1)), { cache: true }, env);
+        expect(env.httpCalls).to.have.length(2);
+        expect(env.cache.resourceCache).to.deep.equal({});
+    });
+
     it('writes the whole batch once when the cache has no flush helper', async function () {
         const env = createEnv({ omitFlush: true, deferPersist: true });
         await runOptimized(clone(nodes()), { cache: true, geo: true }, env);

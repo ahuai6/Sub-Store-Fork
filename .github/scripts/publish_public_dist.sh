@@ -53,6 +53,9 @@ fi
 
 for required in \
   Surge-Beta.sgmodule \
+  geo.js \
+  GEO-LICENSE.txt \
+  GEO-NOTICE.md \
   sub-store.min.js \
   sub-store-0.min.js \
   sub-store-1.min.js \
@@ -122,9 +125,12 @@ else
   branch=main
 fi
 
-# scripts/check/geo.js is an optimized copy of xream/scripts geo.js. That
-# repository's LICENSE is GPL-3.0, but its README forbids republication, so
-# the file is not copied to the public artifact repo.
+# The owner explicitly requested geo.js publication on 2026-11-13.
+# Publish only this requested script with its upstream license and attribution;
+# other private source files are not copied to the public artifact repo.
+for file in geo.js GEO-LICENSE.txt GEO-NOTICE.md; do
+  cp "${DIST_DIR}/${file}" "${workdir}/repo/${file}"
+done
 # Copy LICENSE from the source checkout unchanged.
 cp "${SOURCE_ROOT}/LICENSE" "${workdir}/repo/LICENSE"
 cp "${DIST_DIR}/Surge-Beta.sgmodule" "${workdir}/repo/Surge-Beta.sgmodule"
@@ -133,7 +139,7 @@ cat > "${workdir}/repo/README.md" <<EOF
 # Sub-Store public build artifacts
 
 This repository publishes build artifacts so Surge can download them.
-The source repository (\`${SOURCE_REPO}\`) is private. Do not put source here.
+The source repository (\`${SOURCE_REPO}\`) is private. Only the explicitly requested geo.js operator source and its notices are published here alongside artifacts.
 
 | | |
 | --- | --- |
@@ -163,6 +169,17 @@ https://ahuai6.github.io/Sub-Store-Fork-Dist/
 
 The \`/\` redirect targets that site. It is the upstream front end (GPL-3.0), built for this subpath. License and corresponding source are on the \`gh-pages\` branch.
 
+## Geo check operator
+
+[geo.js](./geo.js) is also published as readable JavaScript at:
+
+https://raw.githubusercontent.com/${REPO}/main/geo.js
+
+Add that URL as a Sub-Store Script Operator. It is a modified xream/scripts
+operator; see [GEO-NOTICE.md](./GEO-NOTICE.md) for attribution, upstream terms,
+changes and optional arguments, and [GEO-LICENSE.txt](./GEO-LICENSE.txt) for the
+upstream GPL-3.0 license. It is separate from the backend's AGPL license.
+
 ## License
 
 Sub-Store is licensed under the GNU Affero General Public License v3.0. See [LICENSE](./LICENSE).
@@ -170,7 +187,7 @@ Sub-Store is licensed under the GNU Affero General Public License v3.0. See [LIC
 Corresponding source for this build is upstream commit \`${UPSTREAM_SHA:-unknown}\` (https://github.com/sub-store-org/Sub-Store/tree/${UPSTREAM_SHA:-master}) plus whatever else is in the private source repo at \`${SOURCE_SHA}\`. The release build also pins the mihomo User-Agent the same way upstream's release workflow does. AGPL-3.0 requires modified versions that are distributed to make their corresponding source available.
 EOF
 
-git -C "${workdir}/repo" add LICENSE README.md Surge-Beta.sgmodule
+git -C "${workdir}/repo" add LICENSE README.md Surge-Beta.sgmodule geo.js GEO-LICENSE.txt GEO-NOTICE.md
 if git -C "${workdir}/repo" diff --cached --quiet; then
   echo "Module, LICENSE, and README are already current."
 else
@@ -200,6 +217,9 @@ assets=(
   "${DIST_DIR}/sub-store.bundle.js"
   "${DIST_DIR}/runtime-manifest.json"
   "${DIST_DIR}/Surge-Beta.sgmodule"
+  "${DIST_DIR}/geo.js"
+  "${DIST_DIR}/GEO-LICENSE.txt"
+  "${DIST_DIR}/GEO-NOTICE.md"
 )
 
 if gh release view "$VERSION" --repo "$REPO" >/dev/null 2>&1; then

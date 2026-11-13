@@ -1,7 +1,9 @@
 import $ from '@/core/app';
+import { CacheShards, jsonBytes } from '@/utils/cache-shards';
 
 // One $persistentStore value is capped at 4 MB on Surge iOS. Stay under that
-// with room for JSON quoting. Oldest entries are dropped first.
+// with room for JSON quoting. Unsharded maps evict oldest entries; sharded
+// maps isolate entries so an unrelated subscription is never evicted.
 export const STORE_BUDGET_BYTES = 3 * 1024 * 1024;
 export const DEFAULT_ENTRY_BUDGET_BYTES = 1024 * 1024;
 
@@ -23,7 +25,7 @@ export function stableStringify(value) {
 
 function byteLength(value) {
     try {
-        return JSON.stringify(value).length;
+        return jsonBytes(value);
     } catch (e) {
         return Infinity;
     }
@@ -44,6 +46,7 @@ export class BoundedCache {
         budget = STORE_BUDGET_BYTES,
         read,
         write,
+        sharded = false,
     }) {
         this.storeKey = storeKey;
         this.resolveTtl = resolveTtl;
@@ -52,12 +55,23 @@ export class BoundedCache {
         this.now = () => Date.now();
         this._read = read || ((key) => $.read(key));
         this._write = write || ((value, key) => $.write(value, key));
+        this.shards = sharded
+            ? new CacheShards(storeKey, {
+                  read: this._read,
+                  write: this._write,
+              })
+            : null;
         this._seq = 0;
         this.entries = {};
         this._load();
     }
 
     _load() {
+        if (this.shards) {
+            this.entries = this.shards.load();
+            if (this._dropExpired(false)) this._persist();
+            return;
+        }
         if (!this._read(this.storeKey)) {
             this._write('{}', this.storeKey);
         }
@@ -80,7 +94,8 @@ export class BoundedCache {
     }
 
     _persist() {
-        this._write(JSON.stringify(this.entries), this.storeKey);
+        if (this.shards) return this.shards.save(this.entries);
+        return this._write(JSON.stringify(this.entries), this.storeKey);
     }
 
     _dropExpired(persist) {
@@ -88,7 +103,7 @@ export class BoundedCache {
         let changed = false;
         for (const id of Object.keys(this.entries)) {
             const cached = this.entries[id];
-            if (!cached || !cached.time || cached.time <= now) {
+            if (!cached || !cached.time || this._expires(cached) <= now) {
                 delete this.entries[id];
                 changed = true;
             }
@@ -102,11 +117,17 @@ export class BoundedCache {
         this._persist();
     }
 
+    _expires(cached) {
+        return cached.created != null
+            ? Math.min(cached.time, cached.created + this.resolveTtl())
+            : cached.time; // Legacy entries retain their original deadline.
+    }
+
     get(id) {
         const cached = this.entries[id];
-        if (!cached || !cached.time) return null;
+        if (!(this.resolveTtl() > 0) || !cached || !cached.time) return null;
         // Expired entries are not reusable, even when id still matches.
-        if (this.now() >= cached.time) {
+        if (this.now() >= this._expires(cached)) {
             delete this.entries[id];
             this._persist();
             return null;
@@ -119,7 +140,10 @@ export class BoundedCache {
     }
 
     set(id, value, ttlMs) {
-        const ttl = normalizePositive(ttlMs) ?? this.resolveTtl();
+        const ttl = Math.min(
+            normalizePositive(ttlMs) ?? this.resolveTtl(),
+            this.resolveTtl(),
+        );
         if (!(ttl > 0)) return false;
         const now = this.now();
         this._seq += 1;
@@ -129,8 +153,7 @@ export class BoundedCache {
             seq: this._seq,
             data: value,
         };
-        const dataBytes =
-            typeof value === 'string' ? value.length : byteLength(value);
+        const dataBytes = byteLength(value);
         const storedBytes = byteLength(entry);
         const entryBudget = this.entryBudget();
         if (
@@ -144,10 +167,10 @@ export class BoundedCache {
             return false;
         }
         this.entries[id] = entry;
-        this._evictOldest();
+        this._dropExpired(false);
+        if (!this.shards) this._evictOldest();
         if (!this.entries[id]) return false;
-        this._persist();
-        return true;
+        return this._persist() !== false;
     }
 
     _evictOldest() {
@@ -156,7 +179,10 @@ export class BoundedCache {
         const order = Object.keys(this.entries).sort((a, b) => {
             const left = this.entries[a] || {};
             const right = this.entries[b] || {};
-            return (left.seq || left.created || 0) - (right.seq || right.created || 0);
+            return (
+                (left.seq || left.created || 0) -
+                (right.seq || right.created || 0)
+            );
         });
         for (const id of order) {
             if (!overflow()) break;

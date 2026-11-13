@@ -20,6 +20,8 @@ on:
       - main
     paths:
       - "backend/**"
+      - "scripts/check/geo.js"
+      - "scripts/check/GEO-*"
       - "config/Surge-Beta.sgmodule"
       - ".github/workflows/publish-dist.yml"
       - ".github/scripts/**"
@@ -27,6 +29,8 @@ on:
   pull_request:
     paths:
       - "backend/**"
+      - "scripts/check/geo.js"
+      - "scripts/check/GEO-*"
       - "config/Surge-Beta.sgmodule"
       - ".github/workflows/publish-dist.yml"
       - ".github/scripts/**"
@@ -81,6 +85,8 @@ jobs:
           # src/test/proxy-producers/golden-snapshot.spec.js is part of this
           # glob. Those snapshots must stay byte-identical.
           pnpm test
+          cd ..
+          python3 -m unittest discover -s .github/scripts -p 'test_render_surge_beta_module.py'
 
       - name: Bundle
         run: |
@@ -101,6 +107,9 @@ jobs:
             --check \
             --public-repo "$PUBLIC_DIST_REPO" \
             --output "$out/Surge-Beta.sgmodule" | tee "$out/module.diff"
+          cp scripts/check/geo.js "$out/geo.js"
+          cp scripts/check/GEO-LICENSE.txt "$out/GEO-LICENSE.txt"
+          cp scripts/check/GEO-NOTICE.md "$out/GEO-NOTICE.md"
           cp backend/sub-store.min.js "$out/sub-store.min.js"
           cp backend/dist/sub-store-0.min.js "$out/"
           cp backend/dist/sub-store-1.min.js "$out/"

@@ -98,6 +98,24 @@ need('backend/src/vendor/express.js', 'scriptResourceCache.flush');
 need('backend/src/runtime/build-flags.js', '__SURGE_ONLY__');
 need('backend/bundle-esbuild.js', 'surgeOnly: true');
 need('backend/surge-only-strip.js', '@non-surge-start');
+// Step 5 and publication/module fixes must survive an upstream merge.
+need('backend/src/utils/cache-shards.js', 'cacheShardsVersion');
+need('backend/src/utils/cache-shards.js', 'legacy: this.legacy');
+need('backend/src/utils/bounded-cache.js', 'this.shards.save');
+need('backend/src/utils/output-cache.js', 'sharded: true');
+need('backend/src/utils/check-result-cache.js', 'sharded: true');
+need('backend/src/utils/script-resource-cache.js', 'new CacheShards');
+need('backend/src/utils/script-resource-cache.js', 'ttlFromSetting');
+need('backend/src/utils/resource-cache.js', 'ttlFromSetting');
+need('backend/src/utils/headers-resource-cache.js', 'ttlFromSetting');
+need('scripts/check/geo.js', 'two_phase');
+need('scripts/check/geo.js', 'dedup_target');
+need('.github/scripts/render_surge_beta_module.py', 'parse_module_arguments');
+forbid('.github/scripts/render_surge_beta_module.py', 'prefetch_cron:,');
+need('scripts/check/GEO-NOTICE.md', '49248e431b1ebb3f55b6d384a25582f74cde8207');
+need('scripts/check/GEO-LICENSE.txt', 'GNU GENERAL PUBLIC LICENSE');
+need('.github/workflows/publish-dist.yml', 'test_render_surge_beta_module.py');
+need('.github/scripts/publish_public_dist.sh', 'GEO-NOTICE.md');
 need('scripts/check/geo.js', 'time_budget');
 need(
     '.github/scripts/publish_public_dist.sh',
