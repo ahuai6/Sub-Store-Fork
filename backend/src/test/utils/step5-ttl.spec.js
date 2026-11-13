@@ -2,7 +2,12 @@ import { expect } from 'chai';
 import $ from '@/core/app';
 import scriptCache from '@/utils/script-resource-cache';
 import checks from '@/utils/check-result-cache';
-import { SETTINGS_KEY, SCRIPT_RESOURCE_CACHE_KEY } from '@/constants';
+import {
+    CHECK_RESULT_CACHE_KEY,
+    LAST_GOOD_CACHE_KEY,
+    SCRIPT_RESOURCE_CACHE_KEY,
+    SETTINGS_KEY,
+} from '@/constants';
 
 describe('step 5 TTL and refresh edges', function () {
     const read = $.read.bind($);
@@ -42,8 +47,17 @@ describe('step 5 TTL and refresh edges', function () {
             ).to.have.length(6);
             expect(scriptCache.get('subscription-0')).to.have.length(800000);
             scriptCache.revokeAll();
-            expect(Object.keys(store)).to.have.length(2); // script + shared-check empty roots
             expect(store[SCRIPT_RESOURCE_CACHE_KEY]).to.equal('{}');
+            expect(store[CHECK_RESULT_CACHE_KEY]).to.equal('{}');
+            expect(store[LAST_GOOD_CACHE_KEY]).to.equal('{}');
+            expect(
+                Object.keys(store).filter(
+                    (key) =>
+                        key !== SCRIPT_RESOURCE_CACHE_KEY &&
+                        key !== CHECK_RESULT_CACHE_KEY &&
+                        key !== LAST_GOOD_CACHE_KEY,
+                ),
+            ).to.deep.equal([]);
         } finally {
             scriptCache.revokeAll();
             $.write = write;

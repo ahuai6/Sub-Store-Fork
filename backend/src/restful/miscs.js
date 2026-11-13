@@ -9,6 +9,7 @@ import scriptResourceCache from '@/utils/script-resource-cache';
 import headersResourceCache from '@/utils/headers-resource-cache';
 import outputCache from '@/utils/output-cache';
 import checkResultCache from '@/utils/check-result-cache';
+import lastGoodCache from '@/utils/last-good-cache';
 import {
     GIST_BACKUP_FILE_NAME,
     GIST_BACKUP_KEY,
@@ -166,6 +167,7 @@ async function refresh(_, res) {
     headersResourceCache.revokeAll();
     outputCache.revokeAll();
     checkResultCache.revokeAll();
+    lastGoodCache.revokeAll();
     success(res);
 }
 

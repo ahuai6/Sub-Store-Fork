@@ -58,7 +58,7 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
 | 检测与脚本缓存 | `scriptCacheTtl`；geo 的 cache 关闭后重测；仅运行中的请求可共享 |
 | 资源与流量头缓存 | 各自全局 TTL，0 禁用读写；新条目跟随缩短后的有效期 |
 | 存储分片 | 旧布局可读；迁移不延长 TTL；单值按 UTF-8 计数；clear-cache 清所有已登记分片 |
-| geo operator | 参数/格式兼容，20 并发、预算控制、可选两阶段与目标去重；随许可证和来源说明发布 |
+| geo operator | 参数/格式兼容，20 并发、预算控制、可选两阶段与目标去重；`keep_last` 默认关闭，开启后失败才沿用上次成功，且该存储不受 `scriptCacheTtl` 过期，刷新仍清除；随许可证和来源说明发布 |
 | 编译与冷启动 | getFlag 匹配器只编译一次；Peggy 预编译，语法源保留；sub-store-0 不引入 ProxyUtils |
 | 路由和写入 | file 路由在 sub-store-1，模块匹配同步；Node 单文件写入，脚本缓存批量 flush |
 | Surge 构建开关 | 仅 Surge 两个 bundle 剥离其他宿主适配器；完整保留其他格式导出与其他宿主源码 |

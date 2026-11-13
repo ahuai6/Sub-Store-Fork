@@ -423,4 +423,356 @@ describe('optimized geo.js', function () {
         expect(env.cache.persists.length).to.equal(1);
         expect(Object.keys(env.cache.resourceCache)[0]).to.match(/^geo:[0-9a-f]{32}$/);
     });
+
+    function wireLastGood(env, { reset = true } = {}) {
+        const lastGood = require('@/utils/last-good-cache').default;
+        if (reset) lastGood.revokeAll();
+        env.cache.lastGoodGet = (id) => lastGood.get(id);
+        env.cache.lastGoodSet = (id, value) => lastGood.set(id, value);
+        env.cache.lastGoodFlush = () => lastGood.flush();
+        return lastGood;
+    }
+
+    function measuredBody(country) {
+        return {
+            status: 200,
+            body: JSON.stringify({ country, isp: 'Example' }),
+        };
+    }
+
+    it('matches the original output when keep_last is off', async function () {
+        const cases = [
+            { cache: true, geo: true, incompatible: true },
+            { keep_last: false, cache: true, geo: true },
+            { keep_last: 'false', geo: true, remove_failed: true, incompatible: true },
+        ];
+        for (const args of cases) {
+            const input = nodes();
+            const originalEnv = createEnv();
+            const env = createEnv();
+            const lastGood = wireLastGood(env);
+            const original = await runOriginal(clone(input), args, originalEnv);
+            const optimized = await runOptimized(clone(input), args, env);
+            expect(optimized).to.deep.equal(original);
+            expect(lastGood.entries).to.deep.equal({});
+            expect(env.httpCalls).to.have.length(originalEnv.httpCalls.length);
+        }
+    });
+
+    it('overwrites the stored success with the new measurement', async function () {
+        let country = '日本';
+        const env = createEnv({
+            bodyFor: () => measuredBody(country),
+        });
+        const lastGood = wireLastGood(env);
+        const node = [{ name: 'ok-a', type: 'ss', server: 'a.example', port: 1 }];
+        const first = await runOptimized(
+            clone(node),
+            { keep_last: true, geo: true },
+            env,
+        );
+        expect(first[0].name).to.equal('日本 Example - ok-a');
+        country = '美国';
+        const second = await runOptimized(
+            clone(node),
+            { keep_last: 'true', geo: true },
+            env,
+        );
+        expect(second[0]).to.deep.equal({
+            name: '美国 Example - ok-a',
+            type: 'ss',
+            server: 'a.example',
+            port: 1,
+            _geo: { country: '美国', isp: 'Example' },
+        });
+        expect(Object.values(lastGood.entries)).to.have.length(1);
+        expect(Object.values(lastGood.entries)[0].api.country).to.equal('美国');
+    });
+
+    it('renders the last success when a later test fails or times out', async function () {
+        let mode = 'ok';
+        const env = createEnv({
+            bodyFor: () => {
+                if (mode === 'fail') return { status: 500, body: '{}' };
+                if (mode === 'throw') throw new Error('timeout');
+                return measuredBody('日本');
+            },
+        });
+        const lastGood = wireLastGood(env);
+        const node = [{ name: 'ok-a', type: 'ss', server: 'a.example', port: 1 }];
+        const args = { keep_last: true, geo: true, remove_failed: true };
+        const ok = await runOptimized(clone(node), args, env);
+        mode = 'fail';
+        const failed = await runOptimized(clone(node), args, env);
+        expect(failed).to.deep.equal(ok);
+        expect(JSON.stringify(failed)).to.not.include('last-good');
+        expect(JSON.stringify(failed)).to.not.include('keep_last');
+        mode = 'throw';
+        const thrown = await runOptimized(clone(node), args, env);
+        expect(thrown).to.deep.equal(ok);
+        expect(Object.values(lastGood.entries)[0].api).to.deep.equal({
+            country: '日本',
+            isp: 'Example',
+        });
+    });
+
+    it('keeps the existing failure result when that node has no last success', async function () {
+        const input = [
+            { name: 'FAIL', type: 'ss', server: 'c.example', port: 3 },
+            { name: 'BOOM', type: 'ss', server: 'd.example', port: 4 },
+        ];
+        const args = { keep_last: true, geo: true, incompatible: true, remove_failed: true };
+        const originalEnv = createEnv();
+        const env = createEnv();
+        const lastGood = wireLastGood(env);
+        const original = await runOriginal(clone(input), args, originalEnv);
+        const optimized = await runOptimized(clone(input), args, env);
+        expect(optimized).to.deep.equal(original);
+        expect(optimized).to.have.length(0);
+        expect(lastGood.entries).to.deep.equal({});
+    });
+
+    it('does not expire last-good when scriptCacheTtl elapses or is zero', async function () {
+        realNow = Date.now;
+        let now = 1_700_000_000_000;
+        Date.now = () => now;
+        let fail = false;
+        const env = createEnv({
+            settings: { scriptCacheTtl: 60 },
+            bodyFor: () => (fail ? { status: 500, body: '{}' } : measuredBody('日本')),
+        });
+        const lastGood = wireLastGood(env);
+        const node = [{ name: 'ok-a', type: 'ss', server: 'a.example', port: 1 }];
+        const ok = await runOptimized(
+            clone(node),
+            { cache: true, keep_last: true, geo: true },
+            env,
+        );
+        fail = true;
+        now += 60 * 1000 + 1;
+        const calls = env.httpCalls.length;
+        const again = await runOptimized(
+            clone(node),
+            { cache: true, keep_last: true, geo: true },
+            env,
+        );
+        expect(env.httpCalls.length).to.be.greaterThan(calls);
+        expect(again).to.deep.equal(ok);
+
+        const isolated = createEnv({
+            settings: { scriptCacheTtl: 0 },
+            bodyFor: () => (fail ? { status: 500, body: '{}' } : measuredBody('日本')),
+        });
+        wireLastGood(isolated, { reset: false });
+        fail = false;
+        const fresh = await runOptimized(
+            clone(node),
+            { cache: true, keep_last: true, geo: true },
+            isolated,
+        );
+        const callsAfter = isolated.httpCalls.length;
+        fail = true;
+        const reused = await runOptimized(
+            clone(node),
+            { cache: true, keep_last: true, geo: true },
+            isolated,
+        );
+        expect(isolated.httpCalls.length).to.equal(callsAfter + 1);
+        expect(reused).to.deep.equal(fresh);
+        expect(Object.values(lastGood.entries)[0].api.country).to.equal('日本');
+
+        const callsAfterFailure = env.httpCalls.length;
+        const cachedFailure = await runOptimized(
+            clone(node),
+            { cache: true, keep_last: true, geo: true },
+            env,
+        );
+        expect(env.httpCalls.length).to.equal(callsAfterFailure);
+        expect(cachedFailure).to.deep.equal(ok);
+    });
+
+    it('does not use a last success older than keep_last_max_age', async function () {
+        realNow = Date.now;
+        let now = 1_700_000_000_000;
+        Date.now = () => now;
+        let fail = false;
+        const env = createEnv({
+            bodyFor: () => (fail ? { status: 500, body: '{}' } : measuredBody('日本')),
+        });
+        const lastGood = wireLastGood(env);
+        const node = [{ name: 'ok-a', type: 'ss', server: 'a.example', port: 1 }];
+        const ok = await runOptimized(clone(node), { keep_last: true, geo: true }, env);
+        fail = true;
+        now += 1000;
+        const atBoundary = await runOptimized(
+            clone(node),
+            { keep_last: true, keep_last_max_age: 1000, geo: true },
+            env,
+        );
+        expect(atBoundary).to.deep.equal(ok);
+        now += 1;
+        const expired = await runOptimized(
+            clone(node),
+            { keep_last: true, keep_last_max_age: '1s', geo: true },
+            env,
+        );
+        expect(expired[0].name).to.equal('ok-a');
+        expect(expired[0]._geo).to.equal(undefined);
+        expect(Object.values(lastGood.entries)[0].api.country).to.equal('日本');
+        now = 1_700_000_000_000 + 6 * 24 * 3600 * 1000;
+        const withinWeek = await runOptimized(
+            clone(node),
+            { keep_last: true, keep_last_max_age: '7d', geo: true },
+            env,
+        );
+        expect(withinWeek).to.deep.equal(ok);
+        now = 1_700_000_000_000 + 8 * 24 * 3600 * 1000;
+        const pastWeek = await runOptimized(
+            clone(node),
+            { keep_last: true, keep_last_max_age: '7d', geo: true },
+            env,
+        );
+        expect(pastWeek[0].name).to.equal('ok-a');
+        expect(pastWeek[0]._geo).to.equal(undefined);
+        const kept = await runOptimized(clone(node), { keep_last: true, geo: true }, env);
+        expect(kept).to.deep.equal(ok);
+    });
+
+    it('isolates last-good results with the script cache identity', async function () {
+        let fail = false;
+        const env = createEnv({
+            bodyFor: () => (fail ? { status: 500, body: '{}' } : measuredBody('日本')),
+        });
+        const lastGood = wireLastGood(env);
+        const base = {
+            name: 'a',
+            type: 'ss',
+            server: 'a.example',
+            port: 1,
+            password: 'p',
+        };
+        await runOptimized(
+            [{ ...base, collectionName: 'c1' }],
+            { keep_last: true, geo: true, dedup_target: true },
+            env,
+        );
+        expect(Object.keys(lastGood.entries)).to.have.length(1);
+        fail = true;
+        const result = await runOptimized(
+            [
+                { ...base, collectionName: 'c2', subName: 's', id: 9, _extra: 1 },
+                { ...base, name: 'b' },
+                { ...base, password: 'other' },
+            ],
+            { keep_last: true, geo: true, dedup_target: true },
+            env,
+        );
+        expect(result[0].name).to.equal('日本 Example - a');
+        expect(result[0]._geo.country).to.equal('日本');
+        expect(result[1]).to.include({ name: 'b', type: 'ss' });
+        expect(result[1]._geo).to.equal(undefined);
+        expect(result[2].name).to.equal('a');
+        expect(result[2]._geo).to.equal(undefined);
+        expect(Object.keys(lastGood.entries)).to.have.length(1);
+    });
+
+    it('uses last-good when the budget ends during phase one and does not cache that failure', async function () {
+        const node = nodes().slice(0, 1);
+        const seedEnv = createEnv();
+        wireLastGood(seedEnv);
+        const ok = await runOptimized(
+            clone(node),
+            { two_phase: true, keep_last: true, geo: true },
+            seedEnv,
+        );
+        const env = createEnv({ delayMs: 25, deferPersist: true });
+        const lastGood = wireLastGood(env, { reset: false });
+        const result = await runOptimized(
+            clone(node),
+            {
+                two_phase: true,
+                cache: true,
+                keep_last: true,
+                geo: true,
+                time_budget: 10,
+            },
+            env,
+        );
+        expect(env.httpCalls).to.have.length(1);
+        expect(env.httpCalls[0].url).to.include('generate_204');
+        expect(result).to.deep.equal(ok);
+        expect(env.cache.resourceCache).to.deep.equal({});
+        expect(Object.values(lastGood.entries)[0].api.country).to.equal('日本');
+    });
+
+    it('reuses last-good for nodes skipped by time_budget and leaves unknown nodes unchanged', async function () {
+        this.timeout(10000);
+        const input = [0, 1, 2, 3].map((index) => ({
+            name: `n${index}`,
+            type: 'ss',
+            server: `${index}.example`,
+            port: index + 1,
+        }));
+        let country = '日本';
+        const seedEnv = createEnv({
+            bodyFor: () => measuredBody(country),
+        });
+        wireLastGood(seedEnv);
+        await runOptimized(clone(input), { keep_last: true, geo: true }, seedEnv);
+        country = '美国';
+        const env = createEnv({
+            delayMs: 40,
+            bodyFor: () => measuredBody(country),
+        });
+        wireLastGood(env, { reset: false });
+        const output = await runOptimized(
+            clone(input),
+            { keep_last: true, geo: true, concurrency: 1, time_budget: 30 },
+            env,
+        );
+        const fresh = output.filter((proxy) => proxy.name.includes('美国'));
+        const reused = output.filter((proxy) => proxy.name.includes('日本'));
+        expect(fresh.length).to.be.at.least(1);
+        expect(reused.length).to.be.at.least(1);
+        expect(fresh.every((proxy) => proxy._geo.country === '美国')).to.equal(true);
+        expect(reused.every((proxy) => proxy._geo.country === '日本')).to.equal(true);
+        expect(output.some((proxy) => proxy.name.startsWith('n'))).to.equal(false);
+
+        const unseen = createEnv({ delayMs: 40 });
+        wireLastGood(unseen);
+        const skipped = await runOptimized(
+            clone(input),
+            { keep_last: true, geo: true, concurrency: 1, time_budget: 30 },
+            unseen,
+        );
+        const untouched = skipped.filter((proxy) => !proxy._geo);
+        expect(untouched.length).to.be.at.least(1);
+        expect(untouched.every((proxy) => /^n\d$/.test(proxy.name))).to.equal(true);
+    });
+
+    it('flushes last-good in batches rather than once per node', async function () {
+        const { default: $ } = require('@/core/app');
+        const env = createEnv();
+        const lastGood = wireLastGood(env);
+        const originalWrite = $.write.bind($);
+        const writes = [];
+        $.write = (value, key) => {
+            if (String(key).includes('last-good')) writes.push(String(key));
+            return originalWrite(value, key);
+        };
+        try {
+            const input = Array.from({ length: 30 }, (_, index) => ({
+                name: `n${index}`,
+                type: 'ss',
+                server: `${index}.example`,
+                port: index + 1,
+            }));
+            await runOptimized(input, { keep_last: true, geo: true }, env);
+            expect(Object.keys(lastGood.entries)).to.have.length(30);
+            expect(writes.length).to.be.at.least(1);
+            expect(writes.length).to.be.below(30);
+        } finally {
+            $.write = originalWrite;
+        }
+    });
 });

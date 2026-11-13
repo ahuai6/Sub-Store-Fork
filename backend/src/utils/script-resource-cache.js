@@ -7,6 +7,7 @@ import {
     SETTINGS_KEY,
 } from '@/constants';
 import checkResultCache, { checkKey } from '@/utils/check-result-cache';
+import lastGoodCache from '@/utils/last-good-cache';
 
 // Coalesce the per-node JSON rewrite of #sub-store-cached-script-resource.
 // get/set semantics stay on the in-memory object. The persistent store is
@@ -60,6 +61,13 @@ class ResourceCache {
         } catch (e) {
             $.error(e?.message ?? e);
         }
+        // keep_last is exempt from scriptCacheTtl, but clear-cache still
+        // drops that store and every shard it has registered.
+        try {
+            lastGoodCache.revokeAll();
+        } catch (e) {
+            $.error(e?.message ?? e);
+        }
     }
 
     _persist() {
@@ -104,11 +112,17 @@ class ResourceCache {
         try {
             this._clearTimer();
             this._writesSinceFlush = 0;
-            if (!this._dirty) return;
-            this._dirty = false;
-            this._persist();
+            if (this._dirty) {
+                this._dirty = false;
+                this._persist();
+            }
         } finally {
             this._flushing = false;
+        }
+        try {
+            lastGoodCache.flush();
+        } catch (e) {
+            $.error(e?.message ?? e);
         }
     }
 
@@ -184,14 +198,17 @@ function getTTL() {
 
 const cache = new ResourceCache();
 
-// Additive helpers. Existing get/set/revokeAll behavior is unchanged aside
-// from revokeAll also dropping the shared check store.
+// Additive helpers. Existing get/set behavior is unchanged. revokeAll also
+// drops the shared check store and the opt-in last-good store.
 cache.sharedCheckGet = (identity) => checkResultCache.get(checkKey(identity));
 cache.sharedCheckSet = (identity, value) =>
     checkResultCache.set(checkKey(identity), value);
 cache.sharedCheckClaim = (identity) => checkResultCache.claim(identity);
 cache.sharedCheck = (identity, producer) =>
     checkResultCache.sharedCheck(identity, producer);
+cache.lastGoodGet = (id) => lastGoodCache.get(id);
+cache.lastGoodSet = (id, value) => lastGoodCache.set(id, value);
+cache.lastGoodFlush = () => lastGoodCache.flush();
 
 function wrapDone(fn) {
     if (typeof fn !== 'function' || fn.__scriptCacheFlush) return fn;
