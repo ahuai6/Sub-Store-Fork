@@ -2,12 +2,11 @@
  * Optimized copy of
  * https://github.com/xream/scripts/blob/main/surge/modules/sub-store-scripts/check/geo.js
  *
- * Upstream license: the xream/scripts repository LICENSE is GPL-3.0. This
- * file has no SPDX header of its own. The repository README also forbids
- * republication and says the contents must be deleted within 24 hours.
- * Those extra terms conflict with GPL-3.0, so redistribution is not clearly
- * allowed. This copy stays in the private source repository and is not
- * uploaded to Sub-Store-Fork-Dist.
+ * Modified for ahuai6/Sub-Store-Fork on 2026-11-13.
+ * The upstream repository LICENSE is GPL-3.0; its README also contains
+ * additional restrictions. See GEO-NOTICE.md and GEO-LICENSE.txt for the
+ * upstream attribution, terms and changes. Published at the fork owner's
+ * explicit request; this file is separate from the backend AGPL license.
  *
  * Arguments and output remain compatible. two_phase and dedup_target are
  * opt-in; time_budget is milliseconds (default safety ceiling: 880s). Changes:

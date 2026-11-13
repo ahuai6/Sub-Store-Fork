@@ -83,7 +83,7 @@ describe('Surge prefetch cron', function () {
             { cwd: root },
         );
         const text = fs.readFileSync(output, 'utf8');
-        expect(text).to.include('prefetch_cron:');
+        expect(text).to.include(',prefetch_cron,prefetch_sub,prefetch_col,');
         expect(text).to.include('prefetch:"# Sub-Store Prefetch"');
         expect(text).to.not.include('sub-store-org/Sub-Store');
         const defaults = {

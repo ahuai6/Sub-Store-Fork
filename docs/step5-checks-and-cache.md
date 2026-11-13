@@ -1,9 +1,11 @@
 # Step 5: Surge checks and cache shards
 
 Started from main `09e6d6a312efd0be5c0de38193fce173475c9efb`, including merged
-PRs #5–#8. The private `scripts/check/geo.js` remains excluded from public Dist
-artifacts. Install that script using the same private/local workflow as before.
-Updating the public backend bundles alone does not update your private geo script.
+PRs #5–#8. At the owner’s explicit request, `scripts/check/geo.js` is now published as
+Dist `main/geo.js` and a release asset, with its upstream GPL license and notice.
+Use https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork-Dist/main/geo.js
+as a Sub-Store Script Operator. See `scripts/check/GEO-NOTICE.md` for attribution
+and the upstream README’s additional terms.
 
 ## Geo arguments
 
@@ -74,5 +76,5 @@ After merging, wait for the main publish-dist run, then refresh the backend
 scripts in Surge. Refresh the beta module if the PR #7 route changes have not
 already been installed. No new module arguments are required for this step.
 Two-phase checks and wider target dedup remain off until explicitly enabled in
-the private geo script arguments. Automated tests use simulated HTTP and host
+the geo script arguments. Automated tests use simulated HTTP and host
 stores; actual Surge iOS latency and device storage behavior require device testing.
