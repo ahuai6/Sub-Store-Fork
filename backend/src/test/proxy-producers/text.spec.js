@@ -2393,6 +2393,42 @@ describe('Proxy text producers', function () {
         );
     });
 
+    it('round-trips Surge HTTPUpgrade for VMess, Trojan and VLESS', function () {
+        for (const [type, credentials] of [
+            ['vmess', `username=${UUID},vmess-aead=true`],
+            ['trojan', 'password=test-password'],
+            ['vless', `username=${UUID}`],
+        ]) {
+            const prefix = `Upgrade = ${type}, example.com, 443, ${credentials}, tls=true`;
+            const [proxy] = ProxyUtils.parse(
+                `${prefix}, ws-http-upgrade=true, ws=true, ws-path=/upgrade?x=1, ws-headers=Host:cdn.example.com`,
+            );
+            const expected = {
+                type,
+                network: 'ws',
+                tls: true,
+                'ws-opts': {
+                    'v2ray-http-upgrade': true,
+                    path: '/upgrade?x=1',
+                    headers: { Host: 'cdn.example.com' },
+                },
+            };
+            expectSubset(proxy, expected);
+            expectSubset(
+                ProxyUtils.parse(produceExternal('URI', proxy))[0],
+                expected,
+            );
+
+            for (const target of ['Surge', 'SurgeMac']) {
+                const output = produceExternal(target, proxy, {
+                    useMihomoExternal: true,
+                });
+                expect(output).to.include(',ws=true,ws-http-upgrade=true,');
+                expectSubset(ProxyUtils.parse(output)[0], expected);
+            }
+        }
+    });
+
     it('round-trips Surge VLESS with RAW, WebSocket, gRPC and REALITY', function () {
         const cases = [
             [
@@ -2521,6 +2557,143 @@ describe('Proxy text producers', function () {
         });
     });
 
+    it('round-trips the documented Surge VLESS XHTTP options and share-link extra', function () {
+        const params = [
+            'xhttp=true',
+            'xhttp-path=/edge',
+            'xhttp-host=cdn.example.com',
+            'xhttp-mode=packet-up',
+            'xhttp-padding-bytes=64-128',
+            'xhttp-padding-obfs=true',
+            'xhttp-padding-key=padding',
+            'xhttp-padding-header=X-Padding',
+            'xhttp-padding-placement=queryInHeader',
+            'xhttp-padding-method=tokenish',
+            'xhttp-uplink-method=PUT',
+            'xhttp-session-placement=header',
+            'xhttp-session-key=X-Session',
+            'xhttp-session-table=Base62',
+            'xhttp-session-length=16',
+            'xhttp-seq-placement=header',
+            'xhttp-seq-key=X-Seq',
+            'xhttp-uplink-data-placement=header',
+            'xhttp-uplink-data-key=X-Chunk',
+            'xhttp-uplink-chunk-size=1024',
+            'xhttp-no-grpc-header=true',
+            'xhttp-max-each-post-bytes=10000-20000',
+            'xhttp-min-posts-interval=25',
+            'xhttp-xmux-max-concurrency=8-16',
+            'xhttp-xmux-max-connections=0',
+            'xhttp-xmux-max-reuse-times=10',
+            'xhttp-xmux-max-request-times=600-900',
+            'xhttp-xmux-max-reusable-secs=1800-3000',
+            'xhttp-xmux-keep-alive=-1',
+        ];
+        const [proxy] = ProxyUtils.parse(
+            `XHTTP = vless, example.com, 443, username=${UUID}, ${params.join(', ')}, xhttp-headers="User-Agent:firefox|X-Test:'a,b|c:d'|hOsT:ignored.example.com", tls=true, alpn=h3`,
+        );
+        const expected = {
+            network: 'xhttp',
+            tls: true,
+            alpn: ['h3'],
+            'xhttp-opts': {
+                path: '/edge',
+                host: 'cdn.example.com',
+                mode: 'packet-up',
+                headers: { 'User-Agent': 'firefox', 'X-Test': 'a,b|c:d' },
+                'x-padding-bytes': '64-128',
+                'x-padding-obfs-mode': true,
+                'x-padding-key': 'padding',
+                'x-padding-header': 'X-Padding',
+                'x-padding-placement': 'queryInHeader',
+                'x-padding-method': 'tokenish',
+                'uplink-http-method': 'PUT',
+                'session-placement': 'header',
+                'session-key': 'X-Session',
+                'session-table': 'Base62',
+                'session-length': '16',
+                'seq-placement': 'header',
+                'seq-key': 'X-Seq',
+                'uplink-data-placement': 'header',
+                'uplink-data-key': 'X-Chunk',
+                'uplink-chunk-size': 1024,
+                'no-grpc-header': true,
+                'sc-max-each-post-bytes': '10000-20000',
+                'sc-min-posts-interval-ms': 25,
+                'reuse-settings': {
+                    'max-concurrency': '8-16',
+                    'max-connections': '0',
+                    'c-max-reuse-times': '10',
+                    'h-max-request-times': '600-900',
+                    'h-max-reusable-secs': '1800-3000',
+                    'h-keep-alive-period': -1,
+                },
+            },
+        };
+        expectSubset(proxy, expected);
+        expect(proxy['xhttp-opts'].headers).to.deep.equal(
+            expected['xhttp-opts'].headers,
+        );
+
+        const uri = produceExternal('URI', proxy).replace(
+            'type=xhttp',
+            'type=splithttp',
+        );
+        const [fromUri] = ProxyUtils.parse(
+            uri.replace('#XHTTP', '&insecure=1#XHTTP'),
+        );
+        expectSubset(fromUri, { ...expected, 'skip-cert-verify': true });
+        for (const target of ['Surge', 'SurgeMac']) {
+            const output = produceExternal(target, fromUri);
+            for (const param of [...params, 'skip-cert-verify=true']) {
+                expect(output.split(',')).to.include(param);
+            }
+            expect(output).not.to.include('ignored.example.com');
+            expectSubset(ProxyUtils.parse(output)[0], expected);
+        }
+    });
+
+    it('falls back to Mihomo for SurgeMac VLESS XHTTP with download settings', function () {
+        const proxy = {
+            type: 'vless',
+            name: 'Split Download',
+            server: '192.0.2.1',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'xhttp',
+            'xhttp-opts': {
+                mode: 'stream-up',
+                'download-settings': { server: 'download.example.com' },
+            },
+        };
+        expect(ProxyUtils.produce([proxy], 'Surge', 'external')).to.equal('');
+        const output = produceExternal('SurgeMac', proxy, {
+            useMihomoExternal: true,
+        });
+        const [, config] = output.match(/args="([A-Za-z0-9+/=]+)"/);
+        const [wrapped] = JSON.parse(Base64.decode(config)).proxies;
+        expect(wrapped['xhttp-opts']['download-settings']).to.deep.equal({
+            server: 'download.example.com',
+        });
+    });
+
+    it('preserves explicit false, zero and empty Surge VLESS XHTTP options', function () {
+        const params = 'xhttp-padding-obfs=false,xhttp-session-table="",xhttp-no-grpc-header=false,xhttp-max-each-post-bytes=10000,xhttp-xmux-keep-alive=0';
+        const [proxy] = ProxyUtils.parse(
+            `XHTTP=vless,example.com,443,username=${UUID},xhttp=true,${params}`,
+        );
+        expect(proxy['xhttp-opts']).to.deep.equal({
+            mode: 'auto',
+            'x-padding-obfs-mode': false,
+            'session-table': '',
+            'no-grpc-header': false,
+            'sc-max-each-post-bytes': 10000,
+            'reuse-settings': { 'h-keep-alive-period': 0 },
+        });
+        expect(produceExternal('Surge', proxy)).to.include(params);
+    });
+
     it('round-trips Surge VLESS encryption with XHTTP', function () {
         const encryption = `mlkem768x25519plus.native.0rtt.100-111-1111.75-0-111.50-0-3333.${'Ab9_'.repeat(394)}a-A`;
         const [proxy] = ProxyUtils.parse(
@@ -2539,6 +2712,31 @@ describe('Proxy text producers', function () {
         }
     });
 
+    it('enables Surge VLESS Vision with encryption on RAW, WebSocket and XHTTP', function () {
+        const encryption = `mlkem768x25519plus.native.1rtt.${'A'.repeat(43)}`;
+        const flow = 'xtls-rprx-vision';
+        for (const [transport, network] of [
+            ['', 'tcp'],
+            [',ws=true', 'ws'],
+            [',xhttp=true', 'xhttp'],
+        ]) {
+            const [proxy] = ProxyUtils.parse(
+                `Vision=vless,example.com,443,username=${UUID},flow=${flow},encryption=${encryption}${transport}`,
+            );
+            const output = produceExternal('Surge', proxy);
+            expectSubset(ProxyUtils.parse(output)[0], {
+                network,
+                flow,
+                encryption,
+            });
+            expect(output).not.to.include('tls=true');
+        }
+        const [grpc] = ProxyUtils.parse(
+            `Vision=vless,example.com,443,username=${UUID},flow=${flow},encryption=${encryption},grpc=true,tls=true`,
+        );
+        expect(ProxyUtils.produce([grpc], 'Surge', 'external')).to.equal('');
+    });
+
     it('preserves gRPC authority from a VLESS share link without a service name', function () {
         const [proxy] = ProxyUtils.parse(
             `vless://${UUID}@edge.example.com:443?type=grpc&security=tls&authority=grpc.example.com#VLESS`,
@@ -2547,6 +2745,18 @@ describe('Proxy text producers', function () {
 
         expect(output).to.include(',grpc-authority=grpc.example.com');
         expect(output).not.to.include('grpc-service-name=');
+    });
+
+    it('keeps ws-http-upgrade disabled unless both Surge options are true', function () {
+        const prefix = `Upgrade=vless,example.com,443,username=${UUID}`;
+        const [tcp, ws] = ProxyUtils.parse(
+            `${prefix},ws=false,ws-http-upgrade=true\n${prefix},ws=true,ws-http-upgrade=false`,
+        );
+        expect(tcp.network).to.equal('tcp');
+        expect(ws.network).to.equal('ws');
+        expect(produceExternal('Surge', [tcp, ws])).not.to.include(
+            'ws-http-upgrade=',
+        );
     });
 
     it('wraps unsupported SurgeMac VLESS transports with Mihomo external mode when requested', function () {
@@ -2559,8 +2769,8 @@ describe('Proxy text producers', function () {
                 port: 443,
                 uuid: UUID,
                 tls: true,
-                network: 'ws',
-                'ws-opts': { path: '/upgrade', 'v2ray-http-upgrade': true },
+                network: 'h2',
+                'h2-opts': { path: '/edge' },
             },
             { useMihomoExternal: true, localPort: 16666 },
         );
