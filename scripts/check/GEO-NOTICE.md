@@ -21,7 +21,7 @@ preserved; new modes are opt-in.
 The source is distributed as readable JavaScript with this attribution and the
 upstream GPL license, separately from the backend's AGPL license.
 
-Public URL: https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork-Dist/main/geo.js
+Public URL: https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork/main/scripts/check/geo.js
 Use `geo.js` as a Sub-Store Script Operator, not as a standalone Surge HTTP script.
 Its `cache` argument is optional. Cached check results expire with the global
 `scriptCacheTtl`; disabling caching or clearing the cache forces new checks.

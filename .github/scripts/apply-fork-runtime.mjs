@@ -127,7 +127,7 @@ need('backend/src/restful/miscs.js', 'lastGoodCache.revokeAll');
 need('scripts/check/GEO-NOTICE.md', 'keep_last');
 need(
     '.github/scripts/publish_public_dist.sh',
-    'not copied to the public artifact repo',
+    'explicit release asset list',
 );
 need('.github/scripts/prepare_frontend_pages.py', 'patch_surge_session_guard');
 need(

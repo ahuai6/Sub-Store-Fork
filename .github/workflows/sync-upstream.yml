@@ -4,16 +4,15 @@ name: sync-upstream
 # mirror new tags, and merge that into `main`. A conflict opens a PR. After a
 # clean merge, the fork frontend redirect and CORS origin are reapplied; if
 # that patch no longer matches, main is not pushed and an issue is opened.
-# This workflow never force-pushes.
+# Publish checks run before main is pushed. A check failure opens a PR on
+# sync/tests-failed. This workflow never force-pushes and never deletes branches.
 #
-# The daily run moved to the public repo. This private repo's Actions
-# spending limit refuses jobs before they start. The workflow that syncs
-# upstream into this repo is:
-# https://github.com/ahuai6/Sub-Store-Fork-Dist/blob/main/.github/workflows/sync-upstream.yml
-# That copy sets the actions bot identity before `git merge` (the empty ident
-# name fix) and pushes here with FORK_REPO_TOKEN. Keep this file. Do not add
-# the schedule back here. Dist's schedule is 04:17 UTC.
+# Git identity is set before `git merge`. Runners have no committer identity,
+# and current git refuses the merge with "fatal: empty ident name" before it
+# records conflicts.
 on:
+  schedule:
+    - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -26,9 +25,15 @@ concurrency:
   group: sync-upstream
   cancel-in-progress: false
 
+env:
+  GIT_TERMINAL_PROMPT: "0"
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+  PUBLIC_REPO: ahuai6/Sub-Store-Fork
+
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -124,10 +129,12 @@ jobs:
             echo "clean=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "clean=true" >> "$GITHUB_OUTPUT"
-          echo "conflicts=false" >> "$GITHUB_OUTPUT"
-          echo "before=${before}" >> "$GITHUB_OUTPUT"
-          echo "after=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          {
+            echo "clean=true"
+            echo "conflicts=false"
+            echo "before=${before}"
+            echo "after=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Reapply fork frontend customizations
         id: fork
@@ -174,7 +181,7 @@ jobs:
             echo
             echo "Keep these customizations:"
             echo
-            echo "- \`backend/src/restful/miscs.js\` redirects \`/\` to \`https://ahuai6.github.io/Sub-Store-Fork-Dist/\`."
+            echo "- \`backend/src/restful/miscs.js\` redirects \`/\` to \`https://ahuai6.github.io/Sub-Store-Fork/\`."
             echo "- \`backend/src/utils/cors.js\` keeps \`https://ahuai6.github.io\` on \`NON_NODE_CORS_DEFAULT\`."
             echo
             echo "Upstream commit: \`$(git rev-parse upstream/master)\`"
@@ -187,19 +194,110 @@ jobs:
           fi
           exit 1
 
+      - name: Refresh the published Surge module
+        id: module
+        if: steps.merge.outputs.clean == 'true' && steps.fork.outputs.ok == 'true' && (steps.merge.outputs.before != steps.merge.outputs.after || steps.fork.outputs.changed == 'true')
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/render_surge_beta_module.py \
+            --check \
+            --public-repo "$PUBLIC_REPO" \
+            --output dist/Surge-Beta.sgmodule >/tmp/module.diff
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          if git diff --quiet -- dist/Surge-Beta.sgmodule; then
+            echo "Published Surge module already matches the renderer."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add dist/Surge-Beta.sgmodule
+            git commit -m "refresh published Surge beta module"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node.js
+        if: steps.merge.outputs.clean == 'true' && steps.fork.outputs.ok == 'true' && (steps.merge.outputs.before != steps.merge.outputs.after || steps.fork.outputs.changed == 'true')
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+
+      - name: Run publish checks before pushing main
+        id: tests
+        if: steps.merge.outputs.clean == 'true' && steps.fork.outputs.ok == 'true' && (steps.merge.outputs.before != steps.merge.outputs.after || steps.fork.outputs.changed == 'true')
+        env:
+          PUBLIC_REPO: ${{ env.PUBLIC_REPO }}
+        run: |
+          set +e
+          set -o pipefail
+          bash .github/scripts/run_fork_publish_checks.sh "$GITHUB_WORKSPACE" | tee /tmp/fork-checks.txt
+          code=$?
+          set -e
+          echo "exit=${code}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Open a PR when the checks fail
+        if: always() && steps.tests.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          log = Path("/tmp/fork-checks.txt")
+          text = log.read_text(errors="replace") if log.exists() else "(no log)"
+          tail = "\n".join(text.splitlines()[-80:]).replace("```", "'''")
+          tail = re.sub(r"https://[^@\s/]+@", "https://[redacted]@", tail)
+          tail = re.sub(r"(github_pat_|ghs_|ghp_|x-access-token:)[A-Za-z0-9_]+", r"\1[redacted]", tail)
+          Path("/tmp/fork-checks-tail.txt").write_text(tail)
+          PY
+          pushed=false
+          if git push origin "HEAD:refs/heads/sync/tests-failed"; then
+            pushed=true
+          else
+            echo "Could not fast-forward sync/tests-failed. Not force-pushing."
+          fi
+          {
+            echo "Automatic merge of \`sub-store-org/Sub-Store\` \`master\` into \`main\` was clean, but the publish checks failed. \`main\` was not pushed. Nothing was force-pushed."
+            echo
+            if [ "$pushed" = "true" ]; then
+              echo "The merge is on \`sync/tests-failed\`."
+            else
+              echo "\`sync/tests-failed\` was not updated because that push was not a fast-forward."
+            fi
+            echo
+            echo "Upstream commit: \`$(git rev-parse upstream/master)\`"
+            echo
+            echo "Last lines of the checks:"
+            echo
+            echo '```'
+            cat /tmp/fork-checks-tail.txt
+            echo '```'
+          } > /tmp/sync-tests-body.md
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head sync/tests-failed --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh pr comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/sync-tests-body.md
+            exit 0
+          fi
+          if [ "$pushed" != "true" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "sync: upstream merge checks failed" --body-file /tmp/sync-tests-body.md
+            exit 0
+          fi
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head sync/tests-failed --title "sync: upstream merge checks failed" --body-file /tmp/sync-tests-body.md
+
       - name: Push main
-        if: steps.merge.outputs.clean == 'true' && steps.fork.outputs.ok == 'true'
+        id: push
+        if: steps.merge.outputs.clean == 'true' && steps.fork.outputs.ok == 'true' && steps.module.outcome != 'failure' && (steps.tests.outcome == 'success' || steps.tests.outcome == 'skipped')
         run: |
           set -euo pipefail
           git push origin main
-          if [ "${{ steps.merge.outputs.before }}" != "${{ steps.merge.outputs.after }}" ] || [ "${{ steps.fork.outputs.changed }}" = "true" ]; then
+          if [ "${{ steps.merge.outputs.before }}" != "${{ steps.merge.outputs.after }}" ] || [ "${{ steps.fork.outputs.changed }}" = "true" ] || [ "${{ steps.module.outputs.changed }}" = "true" ]; then
             echo "changed=true" >> "$GITHUB_ENV"
           else
             echo "changed=false" >> "$GITHUB_ENV"
           fi
 
       - name: Close an open conflict PR after a clean merge
-        if: steps.merge.outputs.clean == 'true' && steps.fork.outputs.ok == 'true'
+        if: steps.push.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -209,29 +307,41 @@ jobs:
             gh pr close "$number" --repo "$GITHUB_REPOSITORY" --comment "Upstream merged into main cleanly, so this conflict PR is no longer needed."
           fi
 
-      - name: Build when the published backend changes
-        if: steps.merge.outputs.clean == 'true' && steps.fork.outputs.ok == 'true' && env.changed == 'true'
+      - name: Close an open test-failure PR after the checks pass
+        if: steps.push.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head sync/tests-failed --state open --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh pr close "$number" --repo "$GITHUB_REPOSITORY" --comment "The publish checks passed and main was updated, so this test-failure PR is no longer needed."
+          fi
+
+      - name: Publish when the backend version or fork patch changes
+        if: steps.push.outcome == 'success' && env.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           FORK_CHANGED: ${{ steps.fork.outputs.changed }}
+          MODULE_CHANGED: ${{ steps.module.outputs.changed }}
         run: |
           set -euo pipefail
-          # A push made with the default token does not start the push-triggered
-          # publish workflow, so dispatch it explicitly. That event is allowed
-          # to create a run. Upstream itself only releases when package.json
-          # changes. A fork patch commit also has to be published, or the
-          # public bundles would keep the upstream redirect and CORS default.
+          # A push made with GITHUB_TOKEN does not start the push-triggered
+          # workflows. Dispatch publish-dist when the release version, the
+          # fork redirect/CORS patch, or the published module changed. Other
+          # main commits are published by the schedule once their SHA differs
+          # from the Built from line in the latest Release notes.
           publish=false
           if git diff --name-only "${{ steps.merge.outputs.before }}" "${{ steps.merge.outputs.after }}" | grep -qx 'backend/package.json'; then
             publish=true
           fi
-          if [ "$FORK_CHANGED" = "true" ]; then
+          if [ "$FORK_CHANGED" = "true" ] || [ "$MODULE_CHANGED" = "true" ]; then
             publish=true
           fi
           if [ "$publish" = "true" ]; then
             gh workflow run publish-dist.yml --repo "$GITHUB_REPOSITORY" --ref main
           else
-            echo "No package.json bump and no fork patch commit. Not publishing a new build."
+            echo "No package.json bump and no fork patch or module commit. The publish-dist schedule publishes other main SHAs."
           fi
 
       - name: Open a PR when the merge conflicts
@@ -264,7 +374,7 @@ jobs:
             exit 1
           fi
           if ! git push origin upstream/master:refs/heads/sync/upstream; then
-            body="Could not update \`sync/upstream\` (it is not a fast-forward). Upstream commit: $(git rev-parse upstream/master). Conflicting files:"$'\n\n```\n'"$(cat /tmp/conflict-files)"$'\n```'$'\n\n'"Keep the fork redirect in \`backend/src/restful/miscs.js\` (\`https://ahuai6.github.io/Sub-Store-Fork-Dist/\`) and \`https://ahuai6.github.io\` on \`NON_NODE_CORS_DEFAULT\` in \`backend/src/utils/cors.js\`. \`node .github/scripts/apply-fork-frontend.mjs\` reapplies both when the anchors still match. Nothing was force-pushed."
+            body="Could not update \`sync/upstream\` (it is not a fast-forward). Upstream commit: $(git rev-parse upstream/master). Conflicting files:"$'\n\n```\n'"$(cat /tmp/conflict-files)"$'\n```'$'\n\n'"Keep the fork redirect in \`backend/src/restful/miscs.js\` (\`https://ahuai6.github.io/Sub-Store-Fork/\`) and \`https://ahuai6.github.io\` on \`NON_NODE_CORS_DEFAULT\` in \`backend/src/utils/cors.js\`. \`node .github/scripts/apply-fork-frontend.mjs\` reapplies both when the anchors still match. Nothing was force-pushed."
             title="sync: upstream merge conflicts need attention"
             existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title ${title}" --json number --jq '.[0].number')
             if [ -n "$existing" ]; then
@@ -289,11 +399,12 @@ jobs:
             echo
             echo "Fork customizations that must be kept:"
             echo
-            echo "- \`backend/src/restful/miscs.js\` redirects \`/\` to \`https://ahuai6.github.io/Sub-Store-Fork-Dist/\`."
+            echo "- \`backend/src/restful/miscs.js\` redirects \`/\` to \`https://ahuai6.github.io/Sub-Store-Fork/\`."
             echo "- \`backend/src/utils/cors.js\` keeps \`https://ahuai6.github.io\` on \`NON_NODE_CORS_DEFAULT\`."
             echo "- Run \`node .github/scripts/apply-fork-frontend.mjs\` and commit the result when the anchors still match."
+            echo "- Refresh \`dist/Surge-Beta.sgmodule\` with \`render_surge_beta_module.py\` when the upstream module changed."
             echo
-            echo "Resolve the conflicts on this PR. Do not force-push \`main\` or \`upstream\`."
+            echo "Resolve the conflicts on this PR with a merge commit. Do not squash, rebase, or force-push \`main\` or \`upstream\`."
           } > /tmp/sync-pr-body.md
           existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head sync/upstream --state open --json number --jq '.[0].number')
           if [ -n "$existing" ]; then

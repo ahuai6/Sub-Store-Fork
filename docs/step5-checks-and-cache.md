@@ -1,11 +1,10 @@
 # Step 5: Surge checks and cache shards
 
 Started from main `09e6d6a312efd0be5c0de38193fce173475c9efb`, including merged
-PRs #5–#8. At the owner’s explicit request, `scripts/check/geo.js` is now published as
-Dist `main/geo.js` and a release asset, with its upstream GPL license and notice.
-Use https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork-Dist/main/geo.js
-as a Sub-Store Script Operator. See `scripts/check/GEO-NOTICE.md` for attribution
-and the upstream README’s additional terms.
+PRs #5–#8. `scripts/check/geo.js` is published as a Script Operator at
+https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork/main/scripts/check/geo.js
+and as a release asset, with its upstream GPL license and notice.
+See `scripts/check/GEO-NOTICE.md` for attribution and the upstream README’s additional terms.
 
 ## Geo arguments
 

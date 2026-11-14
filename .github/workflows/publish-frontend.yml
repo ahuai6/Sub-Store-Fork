@@ -1,9 +1,9 @@
 name: publish-frontend
 
-# Build sub-store-org/Sub-Store-Front-End and push it to the gh-pages branch
-# of the public artifact repo. Upstream's dist.zip uses Vite base `/` and a
-# PWA scope of `/`, which 404 on a GitHub Pages project site, so this builds
-# from source with base /Sub-Store-Fork-Dist/ and VITE_API_URL=https://sub.store.
+# Build sub-store-org/Sub-Store-Front-End and push it to this repository's
+# gh-pages branch. Upstream's dist.zip uses Vite base `/` and a PWA scope of
+# `/`, which 404 on a GitHub Pages project site, so this builds from source
+# with base /Sub-Store-Fork/ and VITE_API_URL=https://sub.store.
 #
 # The latest release commit is built when it is master (or master is behind
 # it). Master is built when it has commits the latest release does not,
@@ -13,16 +13,13 @@ name: publish-frontend
 # A new stamp rebuilds even when the upstream sha, base, and API URL match.
 # workflow_dispatch input force=true rebuilds regardless.
 #
-# The site directory is pushed from this job. Nothing is uploaded as an
-# Actions artifact.
-#
-# The daily run moved to the public repo. This private repo's Actions
-# spending limit refuses jobs before they start. The workflow that builds
-# and deploys gh-pages is:
-# https://github.com/ahuai6/Sub-Store-Fork-Dist/blob/main/.github/workflows/publish-frontend.yml
-# It checks this repo out and runs the scripts in this file. Keep this file.
-# Do not add a schedule or push trigger here. Dist's schedule is 05:23 UTC.
+# The site directory is pushed from this job onto gh-pages. Nothing is
+# uploaded as an Actions artifact. The push is not a force-push and does not
+# touch main.
 on:
+  schedule:
+    # Daily, after sync-upstream (04:17 UTC), on its own minute.
+    - cron: "23 5 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -31,20 +28,20 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: publish-frontend
   cancel-in-progress: false
 
 env:
-  PUBLIC_DIST_REPO: ahuai6/Sub-Store-Fork-Dist
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
   FORCE: ${{ github.event.inputs.force == 'true' }}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -66,8 +63,13 @@ jobs:
             echo "Force requested. Building ${{ steps.resolve.outputs.sha }}."
             exit 0
           fi
+          expected_base=$(python3 .github/scripts/prepare_frontend_pages.py --print-base)
+          if [[ -z "$expected_base" || "$expected_base" == *$'\n'* || "$expected_base" == "/" ]]; then
+            echo "::error::base from prepare_frontend_pages.py is empty, multiline, or /"
+            exit 1
+          fi
           set +e
-          raw=$(gh api "repos/${PUBLIC_DIST_REPO}/contents/frontend-version.txt?ref=gh-pages" --jq .content 2>/tmp/pages-version.err)
+          raw=$(gh api "repos/${GITHUB_REPOSITORY}/contents/frontend-version.txt?ref=gh-pages" --jq .content 2>/tmp/pages-version.err)
           code=$?
           set -e
           if [[ "$code" -ne 0 ]]; then
@@ -84,8 +86,9 @@ jobs:
             echo "::error::patch stamp from prepare_frontend_pages.py is empty or multiline"
             exit 1
           fi
+          pages_url="https://ahuai6.github.io${expected_base}"
           if [[ "$deployed_sha" == "${{ steps.resolve.outputs.sha }}" \
-            && "$deployed_base" == "/Sub-Store-Fork-Dist/" \
+            && "$deployed_base" == "$expected_base" \
             && "$deployed_api" == "https://sub.store" \
             && "$deployed_patches" == "$expected_patches" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -94,10 +97,10 @@ jobs:
               echo ""
               echo "\`${deployed_sha}\` is already on \`gh-pages\` with the Pages base, \`https://sub.store\`, and patch stamp \`${expected_patches}\`."
               echo ""
-              echo "https://ahuai6.github.io/Sub-Store-Fork-Dist/"
+              echo "${pages_url}"
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Deployed sha=${deployed_sha:-<none>} patches=${deployed_patches:-<none>} -> sha=${{ steps.resolve.outputs.sha }} patches=${expected_patches}"
+            echo "Deployed sha=${deployed_sha:-<none>} base=${deployed_base:-<none>} patches=${deployed_patches:-<none>} -> sha=${{ steps.resolve.outputs.sha }} base=${expected_base} patches=${expected_patches}"
           fi
 
       - name: Checkout front end
@@ -151,6 +154,5 @@ jobs:
       - name: Publish gh-pages
         if: steps.deployed.outputs.skip != 'true'
         env:
-          PUBLIC_DIST_TOKEN: ${{ secrets.PUBLIC_DIST_TOKEN }}
-          PUBLIC_DIST_REPO: ${{ env.PUBLIC_DIST_REPO }}
-        run: bash .github/scripts/publish_frontend_pages.sh frontend/dist
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/publish_frontend_pages.sh "${PWD}/frontend/dist"

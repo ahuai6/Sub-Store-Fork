@@ -1,128 +1,119 @@
 name: publish-dist
 
-# Build the same backend bundles upstream attaches to a GitHub Release, then
-# publish them where Surge can fetch them. config/Surge-Beta.sgmodule in this
-# repo stays identical to upstream. The copy we publish changes the artifact
-# URL prefix and appends the self-hosted frontend origin to the cors argument.
+# Build the Surge and Node bundles and attach them to this repository's
+# GitHub Release. The tag is backend/package.json version.
 #
-# Upstream's .github/workflows/main.yml is left untouched. It runs on `master`
-# and uploads to this repo's Releases, which are not public while the source
-# repo is private.
+# config/Surge-Beta.sgmodule stays identical to upstream. The copy we publish
+# is dist/Surge-Beta.sgmodule (also attached to the Release). Its script-path
+# URLs use releases/latest/download on this repository.
 #
-# Automatic runs moved to the public repo. This private repo's Actions
-# spending limit refuses jobs before they start. The workflow that builds
-# and publishes is:
-# https://github.com/ahuai6/Sub-Store-Fork-Dist/blob/main/.github/workflows/publish-dist.yml
-# It checks this repo out and runs the scripts in this file. Keep this file.
-# Do not add push, pull_request, or schedule triggers here.
+# The schedule builds only when HEAD differs from the Built from SHA in the
+# latest Release notes. workflow_dispatch always builds. Re-running updates
+# that version's assets in place. This workflow does not push a branch, does
+# not force-push, and does not upload Actions artifacts.
+#
+# Checks include test_render_surge_beta_module.py via
+# .github/scripts/run_fork_publish_checks.sh.
 on:
   workflow_dispatch:
-    inputs:
-      public_repo:
-        description: Public artifact repository (owner/name)
-        default: ahuai6/Sub-Store-Fork-Dist
-        type: string
+  schedule:
+    # Every 3 hours, offset from sync-upstream at 04:17 UTC.
+    - cron: "47 */3 * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: publish-dist-${{ github.ref }}
+  group: publish-dist
   cancel-in-progress: false
 
 env:
-  PUBLIC_DIST_REPO: ${{ github.event.inputs.public_repo || 'ahuai6/Sub-Store-Fork-Dist' }}
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+  PUBLIC_REPO: ahuai6/Sub-Store-Fork
 
 jobs:
-  build:
+  gate:
     runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Compare HEAD with the published Release
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          private=$(git rev-parse HEAD)
+          if [[ ! "$private" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::HEAD is not a 40-character hex SHA."
+            exit 1
+          fi
+          body=$(mktemp)
+          trap 'rm -f "$body"' EXIT
+          published=""
+          set +e
+          gh release view --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$body"
+          code=$?
+          set -e
+          if [[ "$code" -ne 0 || ! -s "$body" ]]; then
+            echo "No GitHub Release yet."
+            published=""
+          else
+            set +e
+            published=$(python3 .github/scripts/dist_source_sha.py < "$body")
+            parse=$?
+            set -e
+            if [[ "$parse" -ne 0 ]]; then
+              echo "Latest Release notes have no single Built from SHA. Building."
+              published=""
+            fi
+          fi
+          echo "HEAD ${private}"
+          echo "Published SHA ${published:-<none>}"
+          {
+            echo "### Source"
+            echo ""
+            echo "HEAD \`${private}\`"
+            echo ""
+            echo "Published \`Built from\` \`${published:-<none>}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "workflow_dispatch builds even when the SHAs match."
+          elif [[ -n "$published" && "$private" == "$published" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "HEAD matches the published SHA. Skipping the build."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Check fork frontend customizations
-        run: |
-          node .github/scripts/apply-fork-frontend.mjs --check
-          node .github/scripts/apply-fork-runtime.mjs --check
-
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version-file: ".node-version"
 
-      - name: Install dependencies
-        run: |
-          corepack enable
-          cd backend && pnpm i --frozen-lockfile
-
-      - name: Sync latest mihomo version
-        run: |
-          MIHOMO_VERSION="$(curl -fsSL https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt | tr -d '\r\n')"
-          test -n "$MIHOMO_VERSION"
-          echo "Using mihomo version: $MIHOMO_VERSION"
-          cd backend
-          MIHOMO_VERSION="$MIHOMO_VERSION" node ../.github/scripts/sync_mihomo_version.mjs
-
-      - name: Test
-        run: |
-          cd backend
-          # src/test/proxy-producers/golden-snapshot.spec.js is part of this
-          # glob. Those snapshots must stay byte-identical.
-          pnpm test
-          cd ..
-          python3 -m unittest discover -s .github/scripts -p 'test_render_surge_beta_module.py'
-
-      - name: Bundle
-        run: |
-          cd backend
-          # sub-store-0 and sub-store-1 are the Surge-only bundles. The Node
-          # bundle and the other script artifacts stay on runtime host detection.
-          # bundle-esbuild.js checks that the Surge files dropped the other
-          # host adapters and that sub-store.bundle.js still has them.
-          pnpm bundle:esbuild
-
-      - name: Render Surge beta module
-        run: |
-          set -euo pipefail
-          out="public-dist"
-          rm -rf "$out"
-          mkdir -p "$out"
-          python3 .github/scripts/render_surge_beta_module.py \
-            --check \
-            --public-repo "$PUBLIC_DIST_REPO" \
-            --output "$out/Surge-Beta.sgmodule" | tee "$out/module.diff"
-          cp scripts/check/geo.js "$out/geo.js"
-          cp scripts/check/GEO-LICENSE.txt "$out/GEO-LICENSE.txt"
-          cp scripts/check/GEO-NOTICE.md "$out/GEO-NOTICE.md"
-          cp backend/sub-store.min.js "$out/sub-store.min.js"
-          cp backend/dist/sub-store-0.min.js "$out/"
-          cp backend/dist/sub-store-1.min.js "$out/"
-          cp backend/dist/sub-store-parser.loon.min.js "$out/"
-          cp backend/dist/cron-sync-artifacts.min.js "$out/"
-          cp backend/dist/proxy-utils.esm.mjs "$out/"
-          cp backend/dist/sub-store.bundle.js "$out/"
-          cp backend/dist/runtime-manifest.json "$out/"
-          node --eval="process.stdout.write(require('./backend/package.json').version)" > "$out/version.txt"
-          git rev-parse HEAD > "$out/source-sha.txt"
-          git fetch origin upstream
-          git merge-base HEAD FETCH_HEAD > "$out/upstream-sha.txt"
-          {
-            echo "### Surge beta module diff vs upstream"
-            echo ""
-            echo '```diff'
-            cat "$out/module.diff"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # Publish from this job's workspace. Actions artifact storage on this
-      # account is already at its quota, so the bundles are not uploaded as
-      # workflow artifacts.
-      - name: Publish to the public artifact repo
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      - name: Run publish checks
         env:
-          PUBLIC_DIST_TOKEN: ${{ secrets.PUBLIC_DIST_TOKEN }}
-          PUBLIC_DIST_REPO: ${{ env.PUBLIC_DIST_REPO }}
+          PUBLIC_REPO: ${{ env.PUBLIC_REPO }}
+        run: bash .github/scripts/run_fork_publish_checks.sh "$GITHUB_WORKSPACE"
+
+      - name: Publish the GitHub Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash .github/scripts/publish_public_dist.sh public-dist
