@@ -1,0 +1,8 @@
+sha=59632bfcba5193fcf213b545e025252007ca15aa
+track=release
+release_tag=2.34.3
+release_sha=59632bfcba5193fcf213b545e025252007ca15aa
+package=2.34.3
+base=/Sub-Store-Fork/
+api=https://sub.store
+patches=subpath-routes-1-surge-session-1-repo-pages-1
