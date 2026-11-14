@@ -1,43 +1,36 @@
 #!/usr/bin/env bash
-# Push a prepared front-end directory to the public repo's gh-pages branch.
+# Push a prepared front-end directory to this repository's gh-pages branch.
 #
 # GitHub Pages serves that branch at
-# https://ahuai6.github.io/Sub-Store-Fork-Dist/ once Pages is enabled.
-# This script never pushes main, upstream, or any other branch, and it does
-# not force-push.
+# https://ahuai6.github.io/Sub-Store-Fork/ once Pages is set to gh-pages
+# and folder / (root). This script never pushes main, upstream, or any other
+# branch, and it does not force-push.
 #
 # Required env:
-#   PUBLIC_DIST_TOKEN   contents:write on the public repo only
-#   PUBLIC_DIST_REPO    owner/name (default: ahuai6/Sub-Store-Fork-Dist)
+#   GITHUB_TOKEN or GH_TOKEN   contents:write on this repository
+#   GITHUB_REPOSITORY          owner/name
 #
 # Argument: directory produced by prepare_frontend_pages.py --finalize-site.
 
 set -euo pipefail
 
 SITE_DIR=${1:?site directory required}
-REPO=${PUBLIC_DIST_REPO:-ahuai6/Sub-Store-Fork-Dist}
-TOKEN=${PUBLIC_DIST_TOKEN:-}
-SOURCE_REPO=${GITHUB_REPOSITORY:-ahuai6/Sub-Store-Fork}
+REPO=${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}
+TOKEN=${GITHUB_TOKEN:-${GH_TOKEN:-}}
 SOURCE_ROOT=${GITHUB_WORKSPACE:-$(cd "$(dirname "$0")/../.." && pwd)}
 BRANCH=gh-pages
-PAGES_URL="https://ahuai6.github.io/Sub-Store-Fork-Dist/"
+PAGES_URL="https://ahuai6.github.io/Sub-Store-Fork/"
 
 if [[ "$BRANCH" != "gh-pages" ]]; then
   echo "::error::Refusing to publish the frontend anywhere but gh-pages."
   exit 1
 fi
 if [[ ! "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-  echo "::error::PUBLIC_DIST_REPO must look like owner/name, got: ${REPO}"
-  exit 1
-fi
-if [[ "$REPO" == "$SOURCE_REPO" ]]; then
-  echo "::error::Refusing to publish the frontend into the source repo (${SOURCE_REPO})."
+  echo "::error::GITHUB_REPOSITORY must look like owner/name, got: ${REPO}"
   exit 1
 fi
 if [[ -z "$TOKEN" ]]; then
-  cat <<EOF
-::error title=PUBLIC_DIST_TOKEN is not set::Create a fine-grained PAT with Contents: Read and write on ${REPO} only, store it as Actions secret PUBLIC_DIST_TOKEN, and re-run publish-frontend. Enabling GitHub Pages is a repository setting and does not require the Pages permission on that token.
-EOF
+  echo "::error title=GITHUB_TOKEN is not set::gh-pages publishing uses the workflow GITHUB_TOKEN with contents: write. Enabling GitHub Pages is a repository setting."
   exit 1
 fi
 
@@ -76,8 +69,8 @@ export GIT_TERMINAL_PROMPT=0
 # actions/checkout@v6 keeps the job token in an includeIf file as
 # http.https://github.com/.extraheader. That key is multi-valued, so adding
 # another -c extraheader sends both and GitHub returns 400 Duplicate header.
-# An empty value clears the inherited list. Keep this in sync with
-# publish_public_dist.sh. The result is exactly one Authorization header.
+# An empty value clears the inherited list. The result is exactly one
+# Authorization header. Commands here run outside the source checkout.
 git_auth() {
   git \
     -c credential.helper= \
@@ -92,10 +85,9 @@ trap 'rm -rf "$workdir"' EXIT
 
 remote="https://github.com/${REPO}.git"
 # Run outside the source checkout. Its includeIf credentials apply only when
-# gitdir matches that repo; ls-remote from inside it was what duplicated the
-# header. Exit 2 from ls-remote --exit-code means the branch is absent. Any
-# other failure must stop the job. Treating it as "no branch" creates a root
-# commit whose push is then rejected, or would need a force-push.
+# gitdir matches that repo. Exit 2 from ls-remote --exit-code means the branch
+# is absent. Any other failure must stop the job. Treating it as "no branch"
+# creates a root commit whose push is then rejected, or would need a force-push.
 creating_branch=0
 if remote_branch=$(git_auth -C "$workdir" ls-remote --exit-code --heads "$remote" "$BRANCH"); then
   if [[ -z "$remote_branch" ]]; then
@@ -150,7 +142,7 @@ fi
   echo ""
   echo "Branch \`${BRANCH}\` on \`${REPO}\`."
   echo ""
-  echo "Enable GitHub Pages for that repository from branch \`${BRANCH}\` and folder \`/ (root)\` if it is not already enabled."
+  echo "Enable GitHub Pages from branch \`${BRANCH}\` and folder \`/ (root)\` if it is not already enabled."
 } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 echo "Published ${PAGES_URL}"

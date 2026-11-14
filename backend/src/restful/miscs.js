@@ -116,7 +116,7 @@ export default function register($app) {
         // Reapplied by .github/scripts/apply-fork-frontend.mjs after upstream merges.
         $app.get('/', async (req, res) => {
             // 302 redirect
-            res.set('location', 'https://ahuai6.github.io/Sub-Store-Fork-Dist/')
+            res.set('location', 'https://ahuai6.github.io/Sub-Store-Fork/')
                 .status(302)
                 .end();
         });

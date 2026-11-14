@@ -4,7 +4,7 @@
 Upstream release dist.zip is produced with Vite base `/` and VitePWA
 scope/start_url `/`. This repo's Pages site is a project site:
 
-    https://ahuai6.github.io/Sub-Store-Fork-Dist/
+    https://ahuai6.github.io/Sub-Store-Fork/
 
 Asset URLs, the PWA scope, and the Vue Router history base have to live
 under that subpath. A few application checks also assume the site is mounted
@@ -23,18 +23,18 @@ import shutil
 import sys
 from pathlib import Path
 
-BASE = "/Sub-Store-Fork-Dist/"
+BASE = "/Sub-Store-Fork/"
 API = "https://sub.store"
-PAGES_URL = "https://ahuai6.github.io/Sub-Store-Fork-Dist/"
+PAGES_URL = "https://ahuai6.github.io/Sub-Store-Fork/"
 UPSTREAM_REPO = "sub-store-org/Sub-Store-Front-End"
 # Bump when a source patch changes behavior. publish-frontend compares this
 # with gh-pages frontend-version.txt and rebuilds even if the upstream sha,
 # base, and API URL are unchanged.
-PATCH_STAMP = "subpath-routes-1-surge-session-1"
+PATCH_STAMP = "subpath-routes-1-surge-session-1-repo-pages-1"
 
 # subs.ts decides whether to load traffic/expiry by comparing the browser
 # pathname to the router path. Under a project-site base that pathname is
-# /Sub-Store-Fork-Dist/subs, so the check never passes and the row stays
+# /Sub-Store-Fork/subs, so the check never passes and the row stays
 # on "加载中".
 FLOW_PAGE_ANCHOR = (
     "const canFetchFlowsForCurrentPage = () => "
@@ -649,6 +649,7 @@ def main() -> None:
     parser.add_argument("--check-dist", action="store_true")
     parser.add_argument("--finalize-site", action="store_true")
     parser.add_argument("--print-patch-stamp", action="store_true")
+    parser.add_argument("--print-base", action="store_true")
     parser.add_argument("--sha", default="")
     parser.add_argument("--track", default="")
     parser.add_argument("--release-tag", default="")
@@ -660,6 +661,8 @@ def main() -> None:
         if not PATCH_STAMP or any(char in PATCH_STAMP for char in "=\n\r"):
             raise SystemExit("PATCH_STAMP must be a single non-empty line without '='")
         print(PATCH_STAMP)
+    if args.print_base:
+        print(normalize_base(BASE))
     if args.patch:
         if args.frontend_dir is None:
             raise SystemExit("--patch requires --frontend-dir")
@@ -685,8 +688,16 @@ def main() -> None:
         if missing:
             raise SystemExit(f"--finalize-site missing {', '.join(missing)}")
         finalize_site(args.dist, args.frontend_dir, meta)
-    if not (args.patch or args.check_dist or args.finalize_site or args.print_patch_stamp):
-        raise SystemExit("pass --patch, --check-dist, --finalize-site, and/or --print-patch-stamp")
+    if not (
+        args.patch
+        or args.check_dist
+        or args.finalize_site
+        or args.print_patch_stamp
+        or args.print_base
+    ):
+        raise SystemExit(
+            "pass --patch, --check-dist, --finalize-site, --print-patch-stamp, and/or --print-base"
+        )
 
 
 if __name__ == "__main__":

@@ -35,7 +35,17 @@ class ModuleArguments(unittest.TestCase):
         self.assertTrue(all(defaults.values()), 'No required module fields without defaults')
         self.assertTrue(defaults['prefetch'].startswith('#'))
         self.assertIn('https://ahuai6.github.io', defaults['cors'])
+        self.assertIn(
+            b'https://github.com/ahuai6/Sub-Store-Fork/releases/latest/download/',
+            updated,
+        )
         assert_expected_diff(source, updated, DEFAULT_PUBLIC_REPO)
+
+    def test_committed_module_matches_renderer(self):
+        source = (ROOT / 'config/Surge-Beta.sgmodule').read_bytes()
+        updated = render(source, DEFAULT_PUBLIC_REPO)
+        committed = (ROOT / 'dist' / 'Surge-Beta.sgmodule').read_bytes()
+        self.assertEqual(committed, updated)
 
     def test_check_rejects_any_default_active_schedule(self):
         source = (ROOT / 'config/Surge-Beta.sgmodule').read_bytes()

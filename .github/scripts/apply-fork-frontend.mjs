@@ -25,7 +25,7 @@ const CORS_FILE = 'backend/src/utils/cors.js';
 const UPSTREAM_REDIRECT = 'https://sub-store.vercel.app/';
 // Upstream 2.44.11 points `/` at this template instead of the Vercel URL.
 const UPSTREAM_REDIRECT_TEMPLATE = '`${DEFAULT_FRONTEND_URL}/`';
-export const FORK_REDIRECT = 'https://ahuai6.github.io/Sub-Store-Fork-Dist/';
+export const FORK_REDIRECT = 'https://ahuai6.github.io/Sub-Store-Fork/';
 const REDIRECT_MARKER = "res.set('location',";
 
 const UPSTREAM_ORIGINS =

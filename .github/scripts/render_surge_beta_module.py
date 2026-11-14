@@ -2,8 +2,8 @@
 """Rewrite Surge-Beta.sgmodule for the public artifact repo.
 
 Upstream's beta module is config/Surge-Beta.sgmodule. Its script-path URLs
-use GitHub Releases on sub-store-org/Sub-Store. This source repo is private,
-so those URLs are rewritten to the same path on a public artifact repo.
+use GitHub Releases on sub-store-org/Sub-Store. Those URLs are rewritten to
+releases/latest/download on this repository.
 
 The published copy also appends the self-hosted frontend origin to the
 default `cors` argument, an opt-in prefetch cron that is off while
@@ -27,7 +27,7 @@ from pathlib import Path
 UPSTREAM_PREFIX = (
     "https://github.com/sub-store-org/Sub-Store/releases/latest/download"
 )
-DEFAULT_PUBLIC_REPO = "ahuai6/Sub-Store-Fork-Dist"
+DEFAULT_PUBLIC_REPO = "ahuai6/Sub-Store-Fork"
 UPSTREAM_CORS_ORIGINS = (
     "https://sub-store.vercel.app,http://substore.stash,https://substore.stash,https://sub.xream.eu.org"
 )
