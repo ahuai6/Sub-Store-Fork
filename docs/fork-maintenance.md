@@ -19,13 +19,15 @@
 | GitHub Release | 构建产物。tag 等于 `backend/package.json` 的 version |
 | `gh-pages` | 从独立前端上游构建的页面，不是后端源码目录 |
 
-CI、发布、前端和上游同步都在本仓库执行，用 `GITHUB_TOKEN`（`contents: write`，同步还要 pull requests、issues、actions）。不需要单独的 PAT。发布走 `publish_public_dist.sh` 和 `publish_frontend_pages.sh`。不上传 Actions artifact，不强推，不删分支。
+CI、发布、前端和上游同步都在本仓库执行，用 `GITHUB_TOKEN`（`contents: write`，同步还要 pull requests、issues、actions）。不使用 `FORK_REPO_TOKEN` 或 `PUBLIC_DIST_TOKEN`。发布走 `publish_public_dist.sh` 和 `publish_frontend_pages.sh`。不上传 Actions artifact，不强推，不删分支。
 
-仓库仍是私有且 Actions 账单停止时，工作流在开始前会被拒绝。公开之后 `ci.yml` 在 push 到 `main` 和 pull request 上自动跑。`main.yml` 只监听 `master`，并且会 force-push `release` 分支，不要运行。`star-history.yml` 仍有每日 schedule，文件保持与上游一致，不在这里改。
+仓库已于 2026-11-15 公开。`ci.yml` 在 push 到 `main` 和 pull request 上自动跑。安全设置和提交身份见下文「令牌与仓库安全」。`main.yml` 只监听 `master`，并且会 force-push `release` 分支，不要运行。`star-history.yml` 仍有每日 schedule，文件保持与上游一致，不在这里改。
 
-时间表见 `AGENTS.md` 第 4 节：`sync-upstream` 每天 04:17 UTC，`publish-frontend` 每天 05:23 UTC，`publish-dist` 每 3 小时的第 47 分。`publish-dist` 的 schedule 只在 `HEAD` 与最新 Release 说明里的 `Built from` 不同时构建。手动 Run 即使 SHA 相同也构建。`publish-frontend` 按 `gh-pages` 上 `frontend-version.txt` 的 sha、base（`/Sub-Store-Fork/`）、api 和 patches 决定是否跳过。
+时间表见 `AGENTS.md` 第 4 节：`sync-upstream` 每天 04:17 UTC，`publish-frontend` 每天 05:23 UTC，`publish-dist` 每 3 小时的第 47 分。`publish-dist` 的 schedule 只在 `HEAD` 与最新 Release 说明里的 `Built from` 不同时构建。手动 Run 即使 SHA 相同也构建。`publish-frontend` 按 `gh-pages` 上 `frontend-version.txt` 的 sha、base（`/Sub-Store-Fork/`）、api 和 patches 决定是否跳过。Pages 源是 `gh-pages` 的 `/`。
 
-历史：2026-11-14 之前这些工作流跑在 `ahuai6/Sub-Store-Fork-Dist`，并用 `FORK_REPO_TOKEN` checkout 本仓库。那个仓库已废弃，合并本变更并公开本仓库后不再读取它。
+公开链接与 `AGENTS.md` 第 1 节相同：模块 https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork/main/dist/Surge-Beta.sgmodule ；脚本 https://github.com/ahuai6/Sub-Store-Fork/releases/latest/download/ ；`geo.js` https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork/main/scripts/check/geo.js ；前端 https://ahuai6.github.io/Sub-Store-Fork/ 。
+
+`ahuai6/Sub-Store-Fork-Dist` 已由用户删除。不要再对它做 checkout、dispatch、发布或读取 secret。
 
 ## Surge 模块默认值
 
@@ -62,11 +64,18 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
 
 同步 PR 合入 `main` 时必须使用 merge commit。规则见下文「收到上游同步 PR 后的处理流程」。
 
-有权限的 Agent 可以用 `workflow_dispatch` 触发本仓库的工作流；没有权限就请用户点 Run。仓库仍私有且账单停止时，这些 Run 会在开始前被拒绝。用户把同步 PR 或失败链接发来后，可以在对话内继续处理。
+有权限的 Agent 可以用 `workflow_dispatch` 触发本仓库的工作流；没有权限就请用户点 Run。用户把同步 PR 或失败链接发来后，可以在对话内继续处理。
 
-## 令牌
+## 令牌与仓库安全
 
-发布、推 `gh-pages`、同步和开 PR 都用工作流里的 `GITHUB_TOKEN`。Actions → General → Workflow permissions 设为 Read and write。不需要 `FORK_REPO_TOKEN`，也不读取 `PUBLIC_DIST_TOKEN`。旧 secret 可以留着，当前工作流不使用它们。
+发布、推 `gh-pages`、同步和开 PR 都用工作流里的 `GITHUB_TOKEN`。`FORK_REPO_TOKEN` 和 `PUBLIC_DIST_TOKEN` 不再使用。
+
+- 写权限只有用户一人。
+- `main` 规则集禁止 force push 和删除分支，但不要求必须通过 PR 才能推 `main`。否则 `sync-upstream` 直推 `main` 会失败。
+- 来自 fork 的 pull request 工作流需要批准后才运行。
+- Actions → General → Workflow permissions 必须是 Read and write。
+- 已开启 secret scanning 和 push protection。
+- 提交作者邮箱使用 `117343258+ahuai6@users.noreply.github.com`。公开前的全历史敏感信息扫描结论干净。仅 4 个提交的作者字段含个人邮箱，不改写历史。禁止提交令牌、订阅链接或真实节点。
 
 | 工作流权限 | 用途 |
 | --- | --- |
@@ -97,6 +106,7 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
 
 1. 读取 PR、上游提交范围、冲突文件、CI 和 release/version 变更。以实际 main 为基准，保留用户提交。
 2. 检查上表相关文件是否改动。人工解决冲突，使用普通 merge/commit，保留上游更新与 fork 语义。
+   `parsers/peggy/surge.js` 再冲突时：保留上游语法和 fork 的预编译导入，`getParser()` 传入 `setSurgeXhttpOption`，不要恢复 `peggy.generate`。见 `AGENTS.md` 第 5 节。PR #19 按此解决了上游 2.44.12–2.44.14。
 3. 运行 `node .github/scripts/apply-fork-frontend.mjs` 和
    `node .github/scripts/apply-fork-runtime.mjs --check`。前者能重套具体锚点，后者是保护检查，
    不会从任意重写后的上游代码中自动重建全部优化。
@@ -106,7 +116,7 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
    `dist/Surge-Beta.sgmodule` 必须与渲染输出一致。
    前端变化还要验证 prepare_frontend_pages.py 补丁锚点、构建产物和 patch stamp。
 6. PR 描述写明上游范围、冲突取舍、fork 保留情况、验证和手动升级事项。
-   仓库公开后 `ci.yml` 会在 PR 上跑同样的检查。仍私有且账单停止时，以本地检查为准。
+   仓库已公开，`ci.yml` 会在 PR 上跑同样的检查。本地检查仍然要跑。
    确认符合既定约束后可直接合并；用户已授权常规 PR 无需逐个批准。确需用户作决定的重要取舍再确认。保留分支。
    上游同步 PR（`sync/*`，或任何并入上游提交的 PR）必须用 “Create a merge commit”
    合并，不要 squash，也不要 rebase。否则上游 ancestry 丢失，这些提交不再是
