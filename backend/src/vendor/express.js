@@ -7,6 +7,9 @@ import {
     NODE_CORS_ALLOWED_ORIGINS_ENV,
     resolveRuntimeCorsPolicy,
 } from '@/utils/cors';
+import scriptResourceCache, {
+    bindScriptCacheFlush,
+} from '@/utils/script-resource-cache';
 
 export default function express({ substore: $, port, host }) {
     const { isNode } = ENV();
@@ -25,13 +28,18 @@ export default function express({ substore: $, port, host }) {
         'Access-Control-Allow-Methods': 'POST,GET,OPTIONS,PATCH,PUT,DELETE',
         'Access-Control-Allow-Headers':
             'Origin, X-Requested-With, Content-Type, Accept',
-        'X-Powered-By': isNode
-            ? eval('process.env.SUB_STORE_X_POWERED_BY') || 'Sub-Store'
-            : 'Sub-Store',
+        'X-Powered-By':
+            /* @non-surge-start */
+            isNode
+                ? eval('process.env.SUB_STORE_X_POWERED_BY') || 'Sub-Store'
+                :
+            /* @non-surge-end */
+            'Sub-Store',
     };
 
     // node support
     if (isNode) {
+        /* @non-surge-start */
         const express_ = eval(`require("express")`);
         const bodyParser = eval(`require("body-parser")`);
         const app = express_();
@@ -74,6 +82,10 @@ export default function express({ substore: $, port, host }) {
             next();
         });
         app.use((req, res, next) => {
+            bindScriptCacheFlush(res);
+            next();
+        });
+        app.use((req, res, next) => {
             const result = applyCors(req.headers?.origin, req.method);
             res.set({
                 ...DEFAULT_HEADERS,
@@ -111,6 +123,7 @@ export default function express({ substore: $, port, host }) {
             });
         };
         return app;
+        /* @non-surge-end */
     }
 
     // route handlers
@@ -271,13 +284,20 @@ export default function express({ substore: $, port, host }) {
             }
 
             send(body = '') {
+                try {
+                    scriptResourceCache.flush();
+                } catch (e) {
+                    // The response still has to be delivered.
+                }
                 const response = {
                     status: isQX ? STATUS_CODE_MAP[statusCode] : statusCode,
                     body,
                     headers,
                 };
                 if (isQX || isGUIforCores) {
+                    /* @non-surge-start */
                     $done(response);
+                    /* @non-surge-end */
                 } else if (isLoon || isSurge || isEgern) {
                     $done({
                         response,

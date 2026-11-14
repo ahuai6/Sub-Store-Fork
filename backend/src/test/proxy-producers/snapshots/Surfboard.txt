@@ -1,0 +1,6 @@
+SS HK=ss,ss.example.com,8388,encrypt-method=aes-128-gcm,password="secret",udp-relay=true
+VMess=vmess,vmess.example.com,443,username=12345678-1234-1234-1234-123456789abc,ws=true,ws-path=/vmess,ws-headers=Host:"edge.example.com",vmess-aead=true,tls=true,sni="edge.example.com",udp-relay=true
+Trojan=trojan,trojan.example.com,443,password=trojan-pass,tls=true,sni="trojan.example.com",udp-relay=true
+Hysteria2=hysteria2,hy2.example.com,443,password="hy2-pass",sni="hy2.example.com",skip-cert-verify=false,udp-relay=true
+SOCKS=socks5,socks.example.com,1080,�ǫ��,,udp-relay=true
+HTTP=http,http.example.com,8080,user,pass,udp-relay=true

@@ -7,6 +7,9 @@ import { updateArtifactStore } from '@/restful/settings';
 import resourceCache from '@/utils/resource-cache';
 import scriptResourceCache from '@/utils/script-resource-cache';
 import headersResourceCache from '@/utils/headers-resource-cache';
+import outputCache from '@/utils/output-cache';
+import checkResultCache from '@/utils/check-result-cache';
+import lastGoodCache from '@/utils/last-good-cache';
 import {
     GIST_BACKUP_FILE_NAME,
     GIST_BACKUP_KEY,
@@ -47,9 +50,12 @@ export default function register($app) {
                     )}"`,
                 )
                 .send(
+                    /* @non-surge-start */
                     $.env.isNode
                         ? JSON.stringify($.cache)
-                        : $.read('#sub-store'),
+                        :
+                    /* @non-surge-end */
+                    $.read('#sub-store'),
                 );
         })
         .post((req, res) => {
@@ -79,8 +85,10 @@ export default function register($app) {
                 }
                 $.write(JSON.stringify(content, null, `  `), '#sub-store');
                 if ($.env.isNode) {
+                    /* @non-surge-start */
                     $.cache = content;
                     $.persistCache();
+                    /* @non-surge-end */
                 }
                 migrate();
                 success(res);
@@ -100,11 +108,15 @@ export default function register($app) {
         });
 
     if (ENV().isNode) {
+        /* @non-surge-start */
         $app.get('/', getEnv);
+        /* @non-surge-end */
     } else {
-        // Redirect sub.store to the default frontend
+        // Redirect sub.store to the self-hosted GitHub Pages frontend.
+        // Reapplied by .github/scripts/apply-fork-frontend.mjs after upstream merges.
         $app.get('/', async (req, res) => {
-            res.set('location', `${DEFAULT_FRONTEND_URL}/`)
+            // 302 redirect
+            res.set('location', 'https://ahuai6.github.io/Sub-Store-Fork/')
                 .status(302)
                 .end();
         });
@@ -112,9 +124,11 @@ export default function register($app) {
 
     // handle preflight request for QX
     if (ENV().isQX) {
+        /* @non-surge-start */
         $app.options('/', async (req, res) => {
             res.status(200).end();
         });
+        /* @non-surge-end */
     }
 
     $app.all('/', (_, res) => {
@@ -152,13 +166,20 @@ async function refresh(_, res) {
     resourceCache.revokeAll();
     scriptResourceCache.revokeAll();
     headersResourceCache.revokeAll();
+    outputCache.revokeAll();
+    checkResultCache.revokeAll();
+    lastGoodCache.revokeAll();
     success(res);
 }
 
 function readCurrentBackupContent() {
     let content = $.read('#sub-store');
     content = content ? JSON.parse(content) : {};
-    if ($.env.isNode) content = JSON.parse(JSON.stringify($.cache));
+    if ($.env.isNode) {
+        /* @non-surge-start */
+        content = JSON.parse(JSON.stringify($.cache));
+        /* @non-surge-end */
+    }
     return content;
 }
 
@@ -434,8 +455,10 @@ async function gistBackupAction(
             // restore settings
             $.write(JSON.stringify(content, null, `  `), '#sub-store');
             if ($.env.isNode) {
+                /* @non-surge-start */
                 $.cache = content;
                 $.persistCache();
+                /* @non-surge-end */
             }
             $.info(`perform migration after restoring from gist...`);
             migrate();

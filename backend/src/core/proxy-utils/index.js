@@ -278,6 +278,7 @@ async function processResponseFn(
 }
 
 async function loadScriptItem(item, executionContext = {}) {
+    /* @non-surge-start */
     if (
         $.env.isNode &&
         !eval('process.env.SUB_STORE_FRONTEND_BACKEND_PATH')?.startsWith('/') &&
@@ -288,6 +289,7 @@ async function loadScriptItem(item, executionContext = {}) {
         $.error(message);
         throw new Error(message);
     }
+    /* @non-surge-end */
 
     let script;
     let $arguments = {};
@@ -353,6 +355,7 @@ async function loadScriptItem(item, executionContext = {}) {
                 throw new Error(`无法加载 ${type}: ${url}`);
             }
         } else if (url?.startsWith('/')) {
+            /* @non-surge-start */
             try {
                 const fs = getFs();
                 script = fs.readFileSync(url.split('#')[0], 'utf8');
@@ -363,6 +366,7 @@ async function loadScriptItem(item, executionContext = {}) {
                 );
                 throw new Error(`无法从该路径读取脚本文件: ${url}`);
             }
+            /* @non-surge-end */
         } else {
             // if this is a remote script, download it
             try {

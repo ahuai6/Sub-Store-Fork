@@ -137,6 +137,7 @@ describe('sync routes', function () {
     });
 
     beforeEach(function () {
+        require('@/utils/output-cache').default.revokeAll();
         state = {
             [SETTINGS_KEY]: {},
             [SUBS_KEY]: [

@@ -1,0 +1,8 @@
+proxies:
+  - {"type":"ss","skip-cert-verify":false,"udp":true,"server":"ss.example.com","port":8388,"cipher":"aes-128-gcm","password":"secret","name":"SS HK"}
+  - {"name":"VMess","type":"vmess","server":"vmess.example.com","port":443,"cipher":"auto","uuid":"12345678-1234-1234-1234-123456789abc","alterId":0,"tls":true,"network":"ws","ws-opts":{"path":"/vmess","headers":{"Host":"edge.example.com"}},"udp":true,"servername":"edge.example.com"}
+  - {"type":"vless","name":"VLESS","server":"vless.example.com","port":443,"uuid":"12345678-1234-1234-1234-123456789abc","udp":true,"tls":true,"skip-cert-verify":false,"packet-encoding":"xudp","network":"ws","ws-opts":{"headers":{"Host":"edge.example.com"},"path":"/vless"},"encryption":"none","servername":"vless.example.com"}
+  - {"type":"trojan","password":"trojan-pass","server":"trojan.example.com","port":443,"name":"Trojan","sni":"trojan.example.com","udp":true,"network":"tcp"}
+  - {"type":"hysteria2","name":"Hysteria2","server":"hy2.example.com","port":443,"password":"hy2-pass","sni":"hy2.example.com","skip-cert-verify":false,"tfo":false,"udp":true}
+  - {"name":"SOCKS","type":"socks5","server":"socks.example.com","port":1080,"username":"�ǫ��,","udp":true}
+  - {"name":"HTTP","type":"http","tls":false,"server":"http.example.com","port":8080,"username":"user","password":"pass","udp":true}

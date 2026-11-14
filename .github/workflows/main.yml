@@ -61,6 +61,7 @@ jobs:
       - name: Test
         run: |
           cd backend
+          # Includes src/test/proxy-producers/golden-snapshot.spec.js.
           pnpm test
       # - name: Build
       #   run: |

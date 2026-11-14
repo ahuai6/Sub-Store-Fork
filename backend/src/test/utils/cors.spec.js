@@ -75,7 +75,32 @@ describe('CORS allowlist policy', function () {
         expect(isOriginAllowed(policy, 'https://substore.stash')).to.equal(
             true,
         );
+        expect(isOriginAllowed(policy, 'https://sub.xream.eu.org')).to.equal(
+            true,
+        );
         expect(isOriginAllowed(policy, 'https://evil.example')).to.equal(false);
+    });
+
+    it('allows the self-hosted GitHub Pages origin by default', function () {
+        for (const isNode of [true, false]) {
+            const policy = resolveCorsPolicy({ isNode });
+
+            expect(policy.value.split(',')).to.include(
+                'https://ahuai6.github.io',
+            );
+            expect(
+                isOriginAllowed(policy, 'https://ahuai6.github.io'),
+            ).to.equal(true);
+            expect(
+                isOriginAllowed(policy, 'https://ahuai6.github.io.evil.example'),
+            ).to.equal(false);
+            expect(
+                isOriginAllowed(policy, 'https://not-ahuai6.github.io'),
+            ).to.equal(false);
+            expect(isOriginAllowed(policy, 'http://ahuai6.github.io')).to.equal(
+                false,
+            );
+        }
     });
 
     it('reads non-Node allowlist values from script arguments', function () {

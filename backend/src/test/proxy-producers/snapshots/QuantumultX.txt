@@ -1,0 +1,6 @@
+shadowsocks=ss.example.com:8388,method=aes-128-gcm,password=secret,udp-relay=true,tag=SS HK
+vmess=vmess.example.com:443,method=chacha20-poly1305,password=12345678-1234-1234-1234-123456789abc,obfs=wss,obfs-uri=/vmess,obfs-host=edge.example.com,tls-host=edge.example.com,aead=true,udp-relay=true,tag=VMess
+vless=vless.example.com:443,method=none,password=12345678-1234-1234-1234-123456789abc,obfs=wss,obfs-uri=/vless,obfs-host=edge.example.com,tls-verification=true,tls-host=vless.example.com,udp-relay=true,tag=VLESS
+trojan=trojan.example.com:443,password=trojan-pass,over-tls=true,tls-host=trojan.example.com,udp-relay=true,tag=Trojan
+socks5=socks.example.com:1080,username=�ǫ��,,udp-relay=true,tag=SOCKS
+http=http.example.com:8080,username=user,password=pass,over-tls=false,udp-relay=true,tag=HTTP

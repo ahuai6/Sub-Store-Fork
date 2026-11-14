@@ -1,7 +1,8 @@
-import peggy from 'peggy';
+// fork: peggy parsers are precompiled
+import compiledParser from './generated/surge.js';
 import { setSurgeXhttpOption } from '../../surge-xhttp';
 
-const grammars = String.raw`
+export const grammars = String.raw`
 // global initializer
 {{
     function $set(obj, path, value) {
@@ -677,9 +678,9 @@ others = comma [^=,]+ equals [^=,]+
 let parser;
 export default function getParser() {
     if (!parser) {
-        const generated = peggy.generate(grammars);
         parser = {
-            parse: (input) => generated.parse(input, { setSurgeXhttpOption }),
+            parse: (input) =>
+                compiledParser.parse(input, { setSurgeXhttpOption }),
         };
     }
     return parser;

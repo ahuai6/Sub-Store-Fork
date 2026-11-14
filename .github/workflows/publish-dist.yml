@@ -1,0 +1,119 @@
+name: publish-dist
+
+# Build the Surge and Node bundles and attach them to this repository's
+# GitHub Release. The tag is backend/package.json version.
+#
+# config/Surge-Beta.sgmodule stays identical to upstream. The copy we publish
+# is dist/Surge-Beta.sgmodule (also attached to the Release). Its script-path
+# URLs use releases/latest/download on this repository.
+#
+# The schedule builds only when HEAD differs from the Built from SHA in the
+# latest Release notes. workflow_dispatch always builds. Re-running updates
+# that version's assets in place. This workflow does not push a branch, does
+# not force-push, and does not upload Actions artifacts.
+#
+# Checks include test_render_surge_beta_module.py via
+# .github/scripts/run_fork_publish_checks.sh.
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 3 hours, offset from sync-upstream at 04:17 UTC.
+    - cron: "47 */3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-dist
+  cancel-in-progress: false
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+  PUBLIC_REPO: ahuai6/Sub-Store-Fork
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Compare HEAD with the published Release
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          private=$(git rev-parse HEAD)
+          if [[ ! "$private" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::HEAD is not a 40-character hex SHA."
+            exit 1
+          fi
+          body=$(mktemp)
+          trap 'rm -f "$body"' EXIT
+          published=""
+          set +e
+          gh release view --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$body"
+          code=$?
+          set -e
+          if [[ "$code" -ne 0 || ! -s "$body" ]]; then
+            echo "No GitHub Release yet."
+            published=""
+          else
+            set +e
+            published=$(python3 .github/scripts/dist_source_sha.py < "$body")
+            parse=$?
+            set -e
+            if [[ "$parse" -ne 0 ]]; then
+              echo "Latest Release notes have no single Built from SHA. Building."
+              published=""
+            fi
+          fi
+          echo "HEAD ${private}"
+          echo "Published SHA ${published:-<none>}"
+          {
+            echo "### Source"
+            echo ""
+            echo "HEAD \`${private}\`"
+            echo ""
+            echo "Published \`Built from\` \`${published:-<none>}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "workflow_dispatch builds even when the SHAs match."
+          elif [[ -n "$published" && "$private" == "$published" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "HEAD matches the published SHA. Skipping the build."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: ".node-version"
+
+      - name: Run publish checks
+        env:
+          PUBLIC_REPO: ${{ env.PUBLIC_REPO }}
+        run: bash .github/scripts/run_fork_publish_checks.sh "$GITHUB_WORKSPACE"
+
+      - name: Publish the GitHub Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/publish_public_dist.sh public-dist

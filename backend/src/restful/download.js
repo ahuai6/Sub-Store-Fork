@@ -17,6 +17,7 @@ import {
 } from '@/restful/age-output';
 import { findShareToken } from '@/restful/token';
 import { maskAgeSecretInUrl } from '@/utils/age';
+import { heavyRequestKey, shareResponse } from '@/utils/inflight';
 
 function getMihomoExternalOptions(query) {
     const useMihomoExternal = query.target === 'SurgeMac';
@@ -83,6 +84,15 @@ export default function register($app) {
 }
 
 async function downloadSubscription(req, res) {
+    if (req.__forkHeavy !== 'download-sub') {
+        req.__forkHeavy = 'download-sub';
+        return shareResponse(
+            heavyRequestKey('download-sub', req, { includeUserAgent: true }),
+            res,
+            () => downloadSubscription(req, res),
+            'download-sub',
+        );
+    }
     const { name } = req.params;
     const isShareRoute = req.path?.startsWith('/share/');
 
@@ -290,6 +300,7 @@ async function downloadSubscription(req, res) {
                 $options,
                 proxy,
                 noCache,
+                noOutputCache: req.query.noOutputCache,
                 noFlow,
             };
             if (_fakeNode || _fakeSub) {
@@ -490,6 +501,17 @@ async function downloadSubscription(req, res) {
 }
 
 async function downloadCollection(req, res) {
+    if (req.__forkHeavy !== 'download-collection') {
+        req.__forkHeavy = 'download-collection';
+        return shareResponse(
+            heavyRequestKey('download-collection', req, {
+                includeUserAgent: true,
+            }),
+            res,
+            () => downloadCollection(req, res),
+            'download-collection',
+        );
+    }
     const { name } = req.params;
 
     const {
@@ -613,6 +635,7 @@ async function downloadCollection(req, res) {
                 $options,
                 proxy,
                 noCache,
+                noOutputCache: req.query.noOutputCache,
                 noFlow,
                 ua: reqUA,
             });

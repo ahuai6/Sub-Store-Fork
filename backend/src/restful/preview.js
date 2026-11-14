@@ -19,6 +19,12 @@ import {
 import { normalizeClashYaml } from '@/core/proxy-utils/preprocessors';
 import { maskAgeSecretInUrl } from '@/utils/age';
 import { isMihomoConfigFile, normalizeFileConfig } from '@/utils/file-type';
+import { heavyRequestKey, shareResponse } from '@/utils/inflight';
+import {
+    buildOutputMaterial,
+    readCachedPreview,
+    writeCachedPreview,
+} from '@/utils/output-cache';
 
 function formatAgeSafeUrls(errors) {
     return Object.keys(errors).map(maskAgeSecretInUrl).join(', ');
@@ -31,6 +37,15 @@ export default function register($app) {
 }
 
 async function previewFile(req, res) {
+    if (req.__forkHeavy !== 'preview-file') {
+        req.__forkHeavy = 'preview-file';
+        return shareResponse(
+            heavyRequestKey('preview-file', req),
+            res,
+            () => previewFile(req, res),
+            'preview-file',
+        );
+    }
     try {
         const file = normalizeFileConfig(req.body);
         let content = '';
@@ -50,6 +65,23 @@ async function previewFile(req, res) {
             .join('\n');
 
         // apply processors
+        const filePreview = {
+            original: filesContent,
+            processed: '',
+        };
+        const fileMaterial = buildOutputMaterial({
+            kind: 'preview-file',
+            raw: filesContent,
+            name: file?.name,
+            process: file?.process || [],
+            noCache: file?.noCache || req.query.noCache,
+            noOutputCache: req.query.noOutputCache,
+        });
+        const cachedFile = readCachedPreview(fileMaterial);
+        if (cachedFile) {
+            success(res, cachedFile);
+            return;
+        }
         const processed =
             Array.isArray(file.process) && file.process.length > 0
                 ? await ProxyUtils.process(
@@ -58,11 +90,10 @@ async function previewFile(req, res) {
                   )
                 : { $content: filesContent, $files: files };
 
+        filePreview.processed = normalizeClashYaml(processed?.$content ?? '');
+        writeCachedPreview(fileMaterial, filePreview);
         // produce
-        success(res, {
-            original: filesContent,
-            processed: normalizeClashYaml(processed?.$content ?? ''),
-        });
+        success(res, filePreview);
     } catch (err) {
         $.error(err.message ?? err);
         failed(
@@ -77,6 +108,15 @@ async function previewFile(req, res) {
 }
 
 async function compareSub(req, res) {
+    if (req.__forkHeavy !== 'preview-sub') {
+        req.__forkHeavy = 'preview-sub';
+        return shareResponse(
+            heavyRequestKey('preview-sub', req),
+            res,
+            () => compareSub(req, res),
+            'preview-sub',
+        );
+    }
     const sub = req.body;
     const mode = resolveIgnoreFailedRemoteSubMode(sub.ignoreFailedRemoteSub);
 
@@ -150,6 +190,25 @@ async function compareSub(req, res) {
                 sourceRaw.push(sub.content);
             }
         }
+        const previewMaterial = buildOutputMaterial({
+            kind: 'preview-sub',
+            platform: target,
+            raw: sourceRaw,
+            name: sub.name,
+            displayName: sub.displayName,
+            process: sub.process || [],
+            source: sub.source,
+            mergeSources: sub.mergeSources,
+            ignoreFailedRemoteSub: mode,
+            noCache: sub.noCache || req.query.noCache,
+            noOutputCache: req.query.noOutputCache,
+            query: { target },
+        });
+        const cachedPreview = readCachedPreview(previewMaterial);
+        if (cachedPreview) {
+            success(res, cachedPreview);
+            return;
+        }
         // parse proxies
         const original = (Array.isArray(content) ? content : [content])
             .map((i) => ProxyUtils.parse(i))
@@ -172,6 +231,7 @@ async function compareSub(req, res) {
             sourceRaw,
         );
 
+        writeCachedPreview(previewMaterial, { original, processed });
         // produce
         success(res, { original, processed });
     } catch (err) {
@@ -209,6 +269,15 @@ async function compareSub(req, res) {
 }
 
 async function compareCollection(req, res) {
+    if (req.__forkHeavy !== 'preview-collection') {
+        req.__forkHeavy = 'preview-collection';
+        return shareResponse(
+            heavyRequestKey('preview-collection', req),
+            res,
+            () => compareCollection(req, res),
+            'preview-collection',
+        );
+    }
     const collection = req.body;
     const collectionMode = resolveIgnoreFailedRemoteSubMode(
         collection.ignoreFailedRemoteSub,
@@ -233,6 +302,7 @@ async function compareCollection(req, res) {
         const results = {};
         const errors = {};
         const rawResults = {};
+        const pending = {};
         await Promise.all(
             subnames.map(async (name) => {
                 const sub = findByName(allSubs, name);
@@ -312,31 +382,10 @@ async function compareCollection(req, res) {
                             sourceRaw.push(sub.content);
                         }
                     }
-                    // parse proxies
-                    let currentProxies = (Array.isArray(raw) ? raw : [raw])
-                        .map((i) => ProxyUtils.parse(i))
-                        .flat();
-
-                    currentProxies.forEach((proxy) => {
-                        proxy._subName = sub.name;
-                        proxy._subDisplayName = sub.displayName;
-                        proxy._collectionName = collection.name;
-                        proxy._collectionDisplayName = collection.displayName;
-                    });
-
-                    // apply processors
                     const currentRaw = Array.isArray(sourceRaw)
                         ? sourceRaw
                         : [sourceRaw];
-                    currentProxies = await ProxyUtils.process(
-                        currentProxies,
-                        sub.process || [],
-                        'JSON',
-                        { [sub.name]: sub, _collection: collection },
-                        undefined,
-                        currentRaw,
-                    );
-                    results[name] = currentProxies;
+                    pending[name] = { raw, sub };
                     rawResults[name] = currentRaw;
                 } catch (err) {
                     if (shouldFallbackIgnoreFailedRemoteSub(subMode)) {
@@ -364,6 +413,84 @@ async function compareCollection(req, res) {
                     errors[name] = err;
                     rawResults[name] = undefined;
 
+                    $.error(
+                        `❌ 处理组合订阅 ${collection.name} 中的子订阅: ${sub.name} 时出现错误：${err}！`,
+                    );
+                }
+            }),
+        );
+
+        const previewMaterial = buildOutputMaterial({
+            kind: 'preview-col',
+            platform: 'JSON',
+            raw: rawResults,
+            name: collection.name,
+            displayName: collection.displayName,
+            process: collection.process || [],
+            subs: subnames.map((subName) => findByName(allSubs, subName)),
+            ignoreFailedRemoteSub: collectionMode,
+            noCache: collection.noCache || req.query.noCache,
+            noOutputCache: req.query.noOutputCache,
+        });
+        let previewCacheable = Object.keys(errors).length === 0;
+        if (previewCacheable) {
+            const cachedPreview = readCachedPreview(previewMaterial);
+            if (cachedPreview) {
+                success(res, cachedPreview);
+                return;
+            }
+        }
+        await Promise.all(
+            Object.keys(pending).map(async (name) => {
+                const { raw, sub } = pending[name];
+                try {
+                    let currentProxies = (Array.isArray(raw) ? raw : [raw])
+                        .map((i) => ProxyUtils.parse(i))
+                        .flat();
+                    currentProxies.forEach((proxy) => {
+                        proxy._subName = sub.name;
+                        proxy._subDisplayName = sub.displayName;
+                        proxy._collectionName = collection.name;
+                        proxy._collectionDisplayName = collection.displayName;
+                    });
+                    currentProxies = await ProxyUtils.process(
+                        currentProxies,
+                        sub.process || [],
+                        'JSON',
+                        { [sub.name]: sub, _collection: collection },
+                        undefined,
+                        rawResults[name],
+                    );
+                    results[name] = currentProxies;
+                } catch (err) {
+                    previewCacheable = false;
+                    if (shouldFallbackIgnoreFailedRemoteSub(
+                        resolveIgnoreFailedRemoteSubMode(sub.ignoreFailedRemoteSub),
+                    )) {
+                        notifyIgnoreFailedRemoteSubFallback({
+                            mode: resolveIgnoreFailedRemoteSubMode(
+                                sub.ignoreFailedRemoteSub,
+                            ),
+                            error: err,
+                            notify: (error) => {
+                                $.notify(
+                                    `🌍 Sub-Store 预览订阅失败`,
+                                    `❌ ${sub.name}`,
+                                    `🤔 原因：${error.message ?? error}`,
+                                );
+                            },
+                        });
+                        $.error(
+                            `订阅 ${sub.name} 在组合订阅预览中启用兜底后返回空结果: ${
+                                err.message ?? err
+                            }`,
+                        );
+                        results[name] = [];
+                        rawResults[name] = [];
+                        return;
+                    }
+                    errors[name] = err;
+                    rawResults[name] = undefined;
                     $.error(
                         `❌ 处理组合订阅 ${collection.name} 中的子订阅: ${sub.name} 时出现错误：${err}！`,
                     );
@@ -422,6 +549,9 @@ async function compareCollection(req, res) {
             rawResults,
         );
 
+        if (previewCacheable) {
+            writeCachedPreview(previewMaterial, { original, processed });
+        }
         success(res, { original, processed });
     } catch (err) {
         if (shouldFallbackIgnoreFailedRemoteSub(collectionMode)) {

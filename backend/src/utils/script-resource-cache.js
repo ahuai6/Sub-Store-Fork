@@ -1,27 +1,38 @@
 import $ from '@/core/app';
+import { CacheShards, jsonBytes, SHARD_BYTES } from '@/utils/cache-shards';
+import { ttlFromSetting } from '@/utils/bounded-cache';
 import {
     SCRIPT_RESOURCE_CACHE_KEY,
     DEFAULT_SCRIPT_CACHE_TTL,
     SETTINGS_KEY,
 } from '@/constants';
+import checkResultCache, { checkKey } from '@/utils/check-result-cache';
+import lastGoodCache from '@/utils/last-good-cache';
+
+// Coalesce the per-node JSON rewrite of #sub-store-cached-script-resource.
+// get/set semantics stay on the in-memory object. The persistent store is
+// updated every BATCH sets, on a short quiet period, and when the request
+// ends. Entries still expire with settings.scriptCacheTtl (default 48h).
+// revokeAll, used by the clear-cache action, writes immediately.
+const BATCH = 25;
+const DEBOUNCE_MS = 200;
 
 class ResourceCache {
     constructor() {
-        if (!$.read(SCRIPT_RESOURCE_CACHE_KEY)) {
-            $.write('{}', SCRIPT_RESOURCE_CACHE_KEY);
-        }
-        try {
-            this.resourceCache = JSON.parse($.read(SCRIPT_RESOURCE_CACHE_KEY));
-        } catch (e) {
-            $.error(
-                `解析持久化缓存中的 ${SCRIPT_RESOURCE_CACHE_KEY} 失败, 重置为 {}, 错误: ${
-                    e?.message ?? e
-                }`,
-            );
-            this.resourceCache = {};
-            $.write('{}', SCRIPT_RESOURCE_CACHE_KEY);
-        }
+        this._dirty = false;
+        this._timer = null;
+        this._writesSinceFlush = 0;
+        this._flushing = false;
+        this.shards = new CacheShards(SCRIPT_RESOURCE_CACHE_KEY);
+        this.resourceCache = this.shards.load();
         this._cleanup();
+    }
+
+    _clearTimer() {
+        if (this._timer != null && typeof clearTimeout === 'function') {
+            clearTimeout(this._timer);
+        }
+        this._timer = null;
     }
 
     _cleanup(prefix, ttl) {
@@ -31,53 +42,142 @@ class ResourceCache {
         Object.entries(this.resourceCache).forEach((entry) => {
             const [id, cached] = entry;
             const shouldDelete =
-                !cached.time || cached.time < now + resolvedTTL;
+                !cached?.time || cached.time <= now + resolvedTTL;
             if (shouldDelete && (prefix ? id.startsWith(prefix) : true)) {
                 delete this.resourceCache[id];
                 clear = true;
             }
         });
-        if (clear) this._persist();
+        if (clear) this._writeThrough();
     }
 
     revokeAll() {
         this.resourceCache = {};
-        this._persist();
+        this._writeThrough();
+        // Clear-cache calls revokeAll. Shared network checks live in their
+        // own store and use scriptCacheTtl as well.
+        try {
+            checkResultCache.revokeAll();
+        } catch (e) {
+            $.error(e?.message ?? e);
+        }
+        // keep_last is exempt from scriptCacheTtl, but clear-cache still
+        // drops that store and every shard it has registered.
+        try {
+            lastGoodCache.revokeAll();
+        } catch (e) {
+            $.error(e?.message ?? e);
+        }
     }
 
     _persist() {
-        $.write(JSON.stringify(this.resourceCache), SCRIPT_RESOURCE_CACHE_KEY);
+        for (const [id, cached] of Object.entries(this.resourceCache)) {
+            if (!cached?.time || cached.time <= Date.now())
+                delete this.resourceCache[id];
+        }
+        this.shards.save(this.resourceCache);
+    }
+
+    _writeThrough() {
+        this._clearTimer();
+        this._dirty = false;
+        this._writesSinceFlush = 0;
+        this._persist();
+    }
+
+    _schedule() {
+        this._dirty = true;
+        this._writesSinceFlush += 1;
+        if (this._writesSinceFlush >= BATCH) {
+            this.flush();
+            return;
+        }
+        if (this._timer != null) return;
+        if (typeof setTimeout !== 'function') {
+            this.flush();
+            return;
+        }
+        this._timer = setTimeout(() => {
+            this._timer = null;
+            this.flush();
+        }, DEBOUNCE_MS);
+        if (this._timer && typeof this._timer.unref === 'function') {
+            this._timer.unref();
+        }
+    }
+
+    flush() {
+        if (this._flushing) return;
+        this._flushing = true;
+        try {
+            this._clearTimer();
+            this._writesSinceFlush = 0;
+            if (this._dirty) {
+                this._dirty = false;
+                this._persist();
+            }
+        } finally {
+            this._flushing = false;
+        }
+        try {
+            lastGoodCache.flush();
+        } catch (e) {
+            $.error(e?.message ?? e);
+        }
     }
 
     gettime(id) {
-        const time = this.resourceCache[id] && this.resourceCache[id].time;
-        if (time && new Date().getTime() <= time) {
-            return this.resourceCache[id].time;
+        const cached = this.resourceCache[id];
+        const time =
+            cached &&
+            Math.min(
+                cached.time,
+                cached.created != null
+                    ? cached.created + getTTL()
+                    : cached.time,
+            );
+        if (getTTL() > 0 && time && Date.now() < time) {
+            return time;
         }
         return null;
     }
 
     get(id, ttl, remove) {
+        if (!(getTTL() > 0)) return null;
         const resolvedTTL = normalizeTTL(ttl) ?? 0;
         const cached = this.resourceCache[id];
-        const time = cached && cached.time;
+        const time =
+            cached &&
+            Math.min(
+                cached.time,
+                cached.created != null
+                    ? cached.created + getTTL()
+                    : cached.time,
+            );
         if (time) {
-            if (Date.now() + resolvedTTL <= time) return cached.data;
+            if (Date.now() + resolvedTTL < time) return cached.data;
             if (remove) {
                 delete this.resourceCache[id];
-                this._persist();
+                this._writeThrough();
             }
         }
         return null;
     }
 
     set(id, value, ttl) {
-        const resolvedTTL = normalizeTTL(ttl) ?? getTTL();
+        if (!(getTTL() > 0)) return;
+        const resolvedTTL = Math.min(normalizeTTL(ttl) ?? getTTL(), getTTL());
+        if (
+            jsonBytes([id, { time: Date.now() + resolvedTTL, data: value }]) >
+            SHARD_BYTES
+        )
+            return;
         this.resourceCache[id] = {
             time: Date.now() + resolvedTTL,
+            created: Date.now(),
             data: value,
         };
-        this._persist();
+        this._schedule();
     }
 }
 
@@ -89,15 +189,65 @@ function normalizeTTL(ttl) {
 }
 
 function getTTL() {
-    const settings = $.read(SETTINGS_KEY) || {};
-    let ttl = settings?.scriptCacheTtl;
-    if (ttl) {
-        ttl = Number(ttl);
-        if (isFinite(ttl) && ttl > 0) {
-            return ttl * 1000;
-        }
-    }
-    return DEFAULT_SCRIPT_CACHE_TTL;
+    return ttlFromSetting(
+        () => $.read(SETTINGS_KEY),
+        'scriptCacheTtl',
+        DEFAULT_SCRIPT_CACHE_TTL,
+    );
 }
 
-export default new ResourceCache();
+const cache = new ResourceCache();
+
+// Additive helpers. Existing get/set behavior is unchanged. revokeAll also
+// drops the shared check store and the opt-in last-good store.
+cache.sharedCheckGet = (identity) => checkResultCache.get(checkKey(identity));
+cache.sharedCheckSet = (identity, value) =>
+    checkResultCache.set(checkKey(identity), value);
+cache.sharedCheckClaim = (identity) => checkResultCache.claim(identity);
+cache.sharedCheck = (identity, producer) =>
+    checkResultCache.sharedCheck(identity, producer);
+cache.lastGoodGet = (id) => lastGoodCache.get(id);
+cache.lastGoodSet = (id, value) => lastGoodCache.set(id, value);
+cache.lastGoodFlush = () => lastGoodCache.flush();
+
+function wrapDone(fn) {
+    if (typeof fn !== 'function' || fn.__scriptCacheFlush) return fn;
+    const wrapped = function (...args) {
+        try {
+            cache.flush();
+        } catch (e) {
+            $.error(e?.message ?? e);
+        }
+        return fn.apply(this, args);
+    };
+    wrapped.__scriptCacheFlush = true;
+    return wrapped;
+}
+
+if (typeof $.done === 'function') {
+    $.done = wrapDone($.done.bind($));
+}
+
+try {
+    if (typeof globalThis.$done === 'function') {
+        globalThis.$done = wrapDone(globalThis.$done);
+    }
+} catch (e) {
+    // Some hosts freeze $done. Response.send still flushes before calling it.
+}
+
+export function bindScriptCacheFlush(res) {
+    if (!res || typeof res.on !== 'function' || res.__scriptCacheFlush) return;
+    res.__scriptCacheFlush = true;
+    const flush = () => {
+        try {
+            cache.flush();
+        } catch (e) {
+            $.error(e?.message ?? e);
+        }
+    };
+    res.on('finish', flush);
+    res.on('close', flush);
+}
+
+export default cache;

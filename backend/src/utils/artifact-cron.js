@@ -37,6 +37,7 @@ function shouldSyncArtifactInGlobalCron(artifact) {
 function validateArtifactCron(cron) {
     if (!cron || !$.env.isNode) return;
 
+    /* @non-surge-start */
     try {
         const { CronTime } = eval(`require("cron")`);
         new CronTime(cron);
@@ -47,6 +48,7 @@ function validateArtifactCron(cron) {
             `Reason: ${e.message ?? e}`,
         );
     }
+    /* @non-surge-end */
 }
 
 function normalizeArtifactCron(artifact) {
@@ -91,6 +93,7 @@ async function runArtifactCron(name, logName, cron) {
 }
 
 function scheduleArtifactCron(artifact) {
+    /* @non-surge-start */
     const cron = getArtifactCron(artifact);
     const name = artifact.name;
     const logName = formatArtifactLogName(artifact);
@@ -114,6 +117,7 @@ function scheduleArtifactCron(artifact) {
             }`,
         );
     }
+    /* @non-surge-end */
 }
 
 function refreshArtifactCronJobs() {
