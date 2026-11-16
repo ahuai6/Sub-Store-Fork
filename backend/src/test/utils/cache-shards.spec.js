@@ -1,4 +1,5 @@
 import { expect } from 'chai';
+import { describe, it } from 'mocha';
 import { CacheShards, jsonBytes, SHARD_BYTES } from '@/utils/cache-shards';
 import { BoundedCache } from '@/utils/bounded-cache';
 
@@ -104,5 +105,87 @@ describe('per-key cache shards', function () {
         shards.load();
         shards.save({ a: { time: 1, data: '😀'.repeat(20000) } });
         expect(JSON.parse(store['#test']).cacheShardsVersion).to.equal(1);
+    });
+
+    it('lazy-loads BoundedCache and reads only the matching shard on get()', function () {
+        const { store, io } = storage();
+        const writer = new BoundedCache({
+            storeKey: '#lazy',
+            sharded: true,
+            resolveTtl: () => 60000,
+            ...io,
+        });
+        for (let i = 0; i < 6; i += 1) {
+            expect(writer.set(`sub-${i}`, 'x'.repeat(200000))).to.equal(true);
+        }
+        expect(JSON.parse(store['#lazy']).cacheShardsVersion).to.equal(1);
+
+        const reads = [];
+        const writes = [];
+        let ttl = 60000;
+        const reader = new BoundedCache({
+            storeKey: '#lazy',
+            sharded: true,
+            resolveTtl: () => ttl,
+            read(key) {
+                reads.push(key);
+                return store[key];
+            },
+            write(value, key) {
+                writes.push(key);
+                return io.write(value, key);
+            },
+        });
+        // Constructor must stay completely lazy.
+        expect(reads).to.deep.equal([]);
+        expect(writes).to.deep.equal([]);
+
+        // Cache hit reads only manifest + that 1 shard.
+        expect(reader.get('sub-2')).to.have.length(200000);
+        expect(reads).to.have.length(2);
+        expect(reads[0]).to.equal('#lazy');
+
+        // Cache miss on already-loaded manifest triggers 0 additional shard reads.
+        reads.length = 0;
+        expect(reader.get('missing')).to.equal(null);
+        expect(reads).to.deep.equal([]);
+
+        // TTL zero never reads or writes the store.
+        ttl = 0;
+        reads.length = 0;
+        writes.length = 0;
+        const zeroReader = new BoundedCache({
+            storeKey: '#lazy',
+            sharded: true,
+            resolveTtl: () => ttl,
+            read(key) {
+                reads.push(key);
+                return store[key];
+            },
+            write(value, key) {
+                writes.push(key);
+                return io.write(value, key);
+            },
+        });
+        expect(zeroReader.get('sub-2')).to.equal(null);
+        expect(zeroReader.set('sub-new', 'abc')).to.equal(false);
+        expect(reads).to.deep.equal([]);
+        expect(writes).to.deep.equal([]);
+
+        // revokeAll drops all shards using only the manifest keys.
+        const killerReads = [];
+        const killer = new BoundedCache({
+            storeKey: '#lazy',
+            sharded: true,
+            resolveTtl: () => 60000,
+            read(key) {
+                killerReads.push(key);
+                return store[key];
+            },
+            ...{ write: io.write },
+        });
+        killer.revokeAll();
+        expect(killerReads).to.deep.equal(['#lazy']);
+        expect(store).to.deep.equal({ '#lazy': '{}' });
     });
 });

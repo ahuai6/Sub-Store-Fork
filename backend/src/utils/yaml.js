@@ -22,7 +22,26 @@ function retry(fn, content, ...args) {
 }
 
 function toSerializable(content) {
-    return JSON.parse(JSON.stringify(content));
+    return typeof content === 'string'
+        ? content
+        : JSON.parse(JSON.stringify(content));
+}
+
+function jsonYamlReplacer(key, value) {
+    if (typeof value === 'function' || typeof value === 'symbol') {
+        return undefined;
+    }
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+        return null;
+    }
+    if (
+        value !== null &&
+        typeof value === 'object' &&
+        typeof value.toJSON === 'function'
+    ) {
+        return value.toJSON(key);
+    }
+    return value;
 }
 
 function normalizeParseOptions(options) {
@@ -42,16 +61,16 @@ function normalizeStringifyOptions(options = {}) {
         sortKeys,
         ...rest
     } = options || {};
-    const normalized = { ...rest };
+    const normalized = {
+        aliasDuplicateObjects: typeof noRefs === 'boolean' ? !noRefs : false,
+        ...rest,
+    };
 
     if (typeof lineWidth === 'number') {
         normalized.lineWidth = lineWidth <= 0 ? 0 : lineWidth;
     }
     if (typeof noArrayIndent === 'boolean') {
         normalized.indentSeq = !noArrayIndent;
-    }
-    if (typeof noRefs === 'boolean') {
-        normalized.aliasDuplicateObjects = !noRefs;
     }
     if (typeof sortKeys !== 'undefined') {
         normalized.sortMapEntries = sortKeys;
@@ -74,7 +93,14 @@ function parse(content, options) {
 }
 
 function stringify(content, options) {
-    return stringifyYaml(content, normalizeStringifyOptions(options));
+    if (content === undefined) {
+        return undefined;
+    }
+    return stringifyYaml(
+        content,
+        jsonYamlReplacer,
+        normalizeStringifyOptions(options),
+    );
 }
 
 export function safeLoad(content, ...args) {
@@ -84,10 +110,10 @@ export function load(content, ...args) {
     return retry(parse, toSerializable(content), ...args);
 }
 export function safeDump(content, ...args) {
-    return stringify(toSerializable(content), ...args);
+    return stringify(content, ...args);
 }
 export function dump(content, ...args) {
-    return stringify(toSerializable(content), ...args);
+    return stringify(content, ...args);
 }
 
 export default {

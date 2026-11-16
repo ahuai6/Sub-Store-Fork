@@ -17,12 +17,14 @@ export class CacheShards {
         this.read = read || ((key) => $.read(key));
         this.write = write || ((value, key) => $.write(value, key));
         this.keys = [];
+        this._keySet = new Set();
         this.encoded = new Map();
         this.sharded = false;
         this.legacy = {};
+        this._manifestLoaded = false;
     }
 
-    load() {
+    loadManifest() {
         try {
             const value = JSON.parse(this.read(this.key) || '{}');
             if (value?.cacheShardsVersion === 1 && Array.isArray(value.keys)) {
@@ -32,37 +34,109 @@ export class CacheShards {
                         typeof key === 'string' &&
                         key.startsWith(`${this.key}:v1:`),
                 );
+                this._keySet = new Set(this.keys);
                 this.legacy = value.legacy || {};
-                const entries = { ...this.legacy };
-                for (const key of this.keys) {
-                    try {
-                        const text = this.read(key);
-                        const pair = JSON.parse(text);
-                        if (Array.isArray(pair) && pair.length === 2) {
-                            entries[pair[0]] = pair[1];
-                            this.encoded.set(key, text);
-                        }
-                    } catch (e) {
-                        /* A corrupt shard must not hide other keys. */
-                    }
-                }
-                return entries;
+                this._manifestLoaded = true;
+                return { sharded: true, entries: { ...this.legacy } };
             }
+            this.sharded = false;
+            this.keys = [];
+            this._keySet = new Set();
             this.legacy =
                 value && typeof value === 'object' && !Array.isArray(value)
                     ? value
                     : {};
-            return { ...this.legacy };
+            this._manifestLoaded = true;
+            return { sharded: false, entries: { ...this.legacy } };
         } catch (e) {
-            return {};
+            this.sharded = false;
+            this.keys = [];
+            this._keySet = new Set();
+            this.legacy = {};
+            this._manifestLoaded = true;
+            return { sharded: false, entries: {} };
         }
+    }
+
+    /**
+     * Read a single entry without loading unrelated shard payloads.
+     */
+    readEntry(id) {
+        if (!id) return undefined;
+        if (!this._manifestLoaded) {
+            this.loadManifest();
+        }
+        if (!this.sharded) {
+            return this.legacy[id];
+        }
+        if (
+            this.legacy &&
+            Object.prototype.hasOwnProperty.call(this.legacy, id)
+        ) {
+            return this.legacy[id];
+        }
+        const shardKey = `${this.key}:v1:${hex_md5(id)}`;
+        if (!this._keySet.has(shardKey)) {
+            return undefined;
+        }
+        try {
+            const text = this.encoded.has(shardKey)
+                ? this.encoded.get(shardKey)
+                : this.read(shardKey);
+            if (!text) return undefined;
+            const pair = JSON.parse(text);
+            if (Array.isArray(pair) && pair.length === 2) {
+                this.encoded.set(shardKey, text);
+                return pair[0] === id ? pair[1] : undefined;
+            }
+        } catch (e) {
+            /* A corrupt shard must not break lookups. */
+        }
+        return undefined;
+    }
+
+    load() {
+        const { sharded, entries } = this.loadManifest();
+        if (!sharded) {
+            return entries;
+        }
+        for (const key of this.keys) {
+            try {
+                const text = this.encoded.has(key)
+                    ? this.encoded.get(key)
+                    : this.read(key);
+                const pair = JSON.parse(text);
+                if (Array.isArray(pair) && pair.length === 2) {
+                    entries[pair[0]] = pair[1];
+                    this.encoded.set(key, text);
+                }
+            } catch (e) {
+                /* A corrupt shard must not hide other keys. */
+            }
+        }
+        return entries;
+    }
+
+    clearAll() {
+        const prevKeys = [...this.keys];
+        this.loadManifest();
+        this.keys = [...new Set([...prevKeys, ...this.keys])];
+        this._keySet = new Set(this.keys);
+        return this.save({});
     }
 
     save(entries) {
         const previous = this.keys;
-        if (!this.sharded && jsonBytes(entries) <= INLINE_BYTES) {
+        if (
+            !this.sharded &&
+            !previous.length &&
+            jsonBytes(entries) <= INLINE_BYTES
+        ) {
             const ok = this.write(JSON.stringify(entries), this.key) !== false;
-            if (ok) this.legacy = { ...entries };
+            if (ok) {
+                this.legacy = { ...entries };
+                this._manifestLoaded = true;
+            }
             return ok;
         }
         const pairs = Object.entries(entries).filter(
@@ -100,6 +174,8 @@ export class CacheShards {
         if (this.write(JSON.stringify(manifest), this.key) === false)
             return false;
         this.keys = keys;
+        this._keySet = new Set(keys);
+        this._manifestLoaded = true;
         this.sharded = true;
         this.legacy = {};
         if (!keys.length) {

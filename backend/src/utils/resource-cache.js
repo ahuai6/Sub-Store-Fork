@@ -8,33 +8,57 @@ import {
 
 class ResourceCache {
     constructor() {
-        if (!$.read(RESOURCE_CACHE_KEY)) {
-            $.write('{}', RESOURCE_CACHE_KEY);
+        this._loaded = false;
+        this._resourceCache = {};
+    }
+
+    get resourceCache() {
+        this._ensureLoaded();
+        return this._resourceCache;
+    }
+
+    set resourceCache(value) {
+        this._loaded = true;
+        this._resourceCache = value;
+    }
+
+    _ensureLoaded() {
+        if (this._loaded) return;
+        this._loaded = true;
+        const raw = $.read(RESOURCE_CACHE_KEY);
+        if (!raw) {
+            this._resourceCache = {};
+            return;
         }
         try {
-            this.resourceCache = JSON.parse($.read(RESOURCE_CACHE_KEY));
+            const parsed = JSON.parse(raw);
+            this._resourceCache =
+                parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                    ? parsed
+                    : {};
         } catch (e) {
             $.error(
                 `解析持久化缓存中的 ${RESOURCE_CACHE_KEY} 失败, 重置为 {}, 错误: ${
                     e?.message ?? e
                 }`,
             );
-            this.resourceCache = {};
+            this._resourceCache = {};
             $.write('{}', RESOURCE_CACHE_KEY);
         }
         this._cleanup();
     }
 
     _cleanup(prefix, ttl) {
+        this._ensureLoaded();
         const resolvedTTL = normalizeTTL(ttl) ?? 0;
         let clear = false;
         const now = Date.now();
-        Object.entries(this.resourceCache).forEach((entry) => {
+        Object.entries(this._resourceCache).forEach((entry) => {
             const [id, cached] = entry;
             const shouldDelete =
                 !cached?.time || cached.time <= now + resolvedTTL;
             if (shouldDelete && (prefix ? id.startsWith(prefix) : true)) {
-                delete this.resourceCache[id];
+                delete this._resourceCache[id];
                 clear = true;
             }
         });
@@ -42,18 +66,21 @@ class ResourceCache {
     }
 
     revokeAll() {
-        this.resourceCache = {};
+        this._loaded = true;
+        this._resourceCache = {};
         this._persist();
     }
 
     _persist() {
-        $.write(JSON.stringify(this.resourceCache), RESOURCE_CACHE_KEY);
+        $.write(JSON.stringify(this._resourceCache), RESOURCE_CACHE_KEY);
     }
 
     gettime(id) {
-        const cached = this.resourceCache[id];
+        if (!(getTTL() > 0)) return null;
+        this._ensureLoaded();
+        const cached = this._resourceCache[id];
         const time = effectiveExpiry(cached);
-        if (getTTL() > 0 && time && Date.now() < time) {
+        if (time && Date.now() < time) {
             return time;
         }
         return null;
@@ -61,13 +88,14 @@ class ResourceCache {
 
     get(id, ttl, remove) {
         if (!(getTTL() > 0)) return null;
+        this._ensureLoaded();
         const resolvedTTL = normalizeTTL(ttl) ?? 0;
-        const cached = this.resourceCache[id];
+        const cached = this._resourceCache[id];
         const time = effectiveExpiry(cached);
         if (time) {
             if (Date.now() + resolvedTTL < time) return cached.data;
             if (remove) {
-                delete this.resourceCache[id];
+                delete this._resourceCache[id];
                 this._persist();
             }
         }
@@ -76,8 +104,9 @@ class ResourceCache {
 
     set(id, value, ttl) {
         if (!(getTTL() > 0)) return;
+        this._ensureLoaded();
         const resolvedTTL = Math.min(normalizeTTL(ttl) ?? getTTL(), getTTL());
-        this.resourceCache[id] = {
+        this._resourceCache[id] = {
             time: Date.now() + resolvedTTL,
             created: Date.now(),
             data: value,

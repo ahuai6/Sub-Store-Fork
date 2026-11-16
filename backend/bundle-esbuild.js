@@ -147,6 +147,7 @@ const SURGE_BUNDLE_ABSENT = [
     '$task.fetch',
     '$prefs',
     'stash-version',
+    'KJUR',
 ];
 // sub-store-0 no longer pulls ProxyUtils. Producers stay in sub-store-1.
 const SURGE_SIMPLE_PRESENT = [

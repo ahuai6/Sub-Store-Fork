@@ -20,12 +20,31 @@ export class LastGoodCache {
             read: io.read,
             write: io.write,
         });
-        this._batch = new BatchFlush(() => this.shards.save(this.entries));
-        this.entries = this.shards.load();
+        this._batch = new BatchFlush(() => this.shards.save(this._entries));
+        this._loaded = false;
+        this._entries = {};
+    }
+
+    get entries() {
+        this._ensureLoaded();
+        return this._entries;
+    }
+
+    set entries(value) {
+        this._loaded = true;
+        this._entries = value;
+    }
+
+    _ensureLoaded() {
+        if (this._loaded) return;
+        this._loaded = true;
+        this._entries = this.shards.load();
     }
 
     get(id) {
-        const entry = this.entries[id];
+        const entry = !this._loaded
+            ? this.shards.readEntry(id)
+            : this._entries[id];
         if (
             !entry ||
             entry.api == null ||
@@ -44,13 +63,21 @@ export class LastGoodCache {
         };
         if (!Number.isFinite(entry.savedAt)) return false;
         if (jsonBytes([id, entry]) > SHARD_BYTES) return false;
-        this.entries[id] = entry;
+        this._ensureLoaded();
+        this._entries[id] = entry;
         this._batch.schedule();
         return true;
     }
 
     revokeAll() {
-        this.entries = {};
+        if (!this._loaded) {
+            this._batch.reset();
+            this._entries = {};
+            this._loaded = true;
+            this.shards.clearAll();
+            return;
+        }
+        this._entries = {};
         this._writeThrough();
     }
 
@@ -60,7 +87,7 @@ export class LastGoodCache {
 
     _writeThrough() {
         this._batch.reset();
-        this.shards.save(this.entries);
+        this.shards.save(this._entries);
     }
 }
 

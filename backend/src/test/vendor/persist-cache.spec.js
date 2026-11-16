@@ -1,11 +1,15 @@
 import fs from 'fs';
+import { builtinModules } from 'module';
 import os from 'os';
 import path from 'path';
+import vm from 'vm';
 
 import { expect } from 'chai';
+import { build } from 'esbuild';
 import { after, before, describe, it } from 'mocha';
 
 import { OpenAPI } from '@/vendor/open-api';
+import { stripNonSurgeRegions } from '../../../surge-only-strip';
 
 describe('persistent store writes', function () {
     let dir;
@@ -99,5 +103,122 @@ describe('persistent store writes', function () {
             fs.readFileSync(path.join(dir, 'root.json'), 'utf8'),
         );
         expect(savedRoot).to.not.have.property('shard-key');
+    });
+
+    it('writes compact JSON in Surge and skips stringify baseline on read-only boots', async function () {
+        this.timeout(15000);
+        const backendRoot = path.resolve(__dirname, '../../..');
+        const bundled = await build({
+            absWorkingDir: backendRoot,
+            entryPoints: ['src/vendor/open-api.js'],
+            bundle: true,
+            write: false,
+            format: 'cjs',
+            platform: 'browser',
+            define: {
+                __SURGE_ONLY__: 'true',
+                $platform: '"Surge"',
+            },
+            plugins: [
+                {
+                    name: 'node-builtin-external',
+                    setup(b) {
+                        const builtins = new Set(
+                            builtinModules.map((n) => n.replace(/^node:/, '')),
+                        );
+                        b.onResolve({ filter: /.*/ }, (args) => {
+                            if (
+                                args.path !== 'buffer' &&
+                                builtins.has(args.path.replace(/^node:/, ''))
+                            ) {
+                                return { path: args.path, external: true };
+                            }
+                        });
+                    },
+                },
+                {
+                    name: 'surge-only-strip',
+                    setup(b) {
+                        b.onLoad({ filter: /\.js$/ }, async (args) => {
+                            if (!args.path.split(path.sep).includes('src'))
+                                return;
+                            const contents = await fs.promises.readFile(
+                                args.path,
+                                'utf8',
+                            );
+                            if (!contents.includes('@non-surge-')) return;
+                            return {
+                                contents: stripNonSurgeRegions(
+                                    contents,
+                                    args.path,
+                                ),
+                                loader: 'js',
+                            };
+                        });
+                    },
+                },
+            ],
+        });
+        const code = bundled.outputFiles[0].text;
+        const backing = {
+            'sub-store': JSON.stringify({ subs: [{ name: 's1' }] }),
+        };
+        const storeWrites = [];
+        let stringifyCalls = 0;
+
+        function runSurge(fn) {
+            const mod = { exports: {} };
+            const context = {
+                module: mod,
+                exports: mod.exports,
+                console,
+                JSON: {
+                    parse: JSON.parse,
+                    stringify: (...args) => {
+                        stringifyCalls += 1;
+                        return JSON.stringify(...args);
+                    },
+                },
+                TextEncoder,
+                TextDecoder,
+                URL,
+                Headers,
+                $httpClient: {},
+                $notification: {},
+                $persistentStore: {
+                    read: (k) => backing[k],
+                    write: (v, k) => {
+                        storeWrites.push({ key: k, value: v });
+                        backing[k] = v;
+                        return true;
+                    },
+                },
+                $done: () => {},
+            };
+            vm.runInNewContext(code, context);
+            const SurgeOpenAPI = mod.exports.OpenAPI;
+            return fn(new SurgeOpenAPI('sub-store'));
+        }
+
+        // Read-only boot must not stringify or write.
+        runSurge((instance) => {
+            expect(instance.read('subs')).to.deep.equal([{ name: 's1' }]);
+        });
+        expect(stringifyCalls).to.equal(0);
+        expect(storeWrites).to.deep.equal([]);
+
+        // Unchanged write on compact store skips $persistentStore.write.
+        runSurge((instance) => {
+            instance.write([{ name: 's1' }], 'subs');
+        });
+        expect(storeWrites).to.deep.equal([]);
+
+        // Modified write persists compact JSON (no pretty 2-space indent).
+        runSurge((instance) => {
+            instance.write([{ name: 's1' }, { name: 's2' }], 'subs');
+        });
+        expect(storeWrites).to.have.length(1);
+        expect(storeWrites[0].value).to.not.include('\n  ');
+        expect(JSON.parse(backing['sub-store']).subs).to.have.length(2);
     });
 });

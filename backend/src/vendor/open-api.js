@@ -128,8 +128,11 @@ export class OpenAPI {
             this.cache = JSON.parse($prefs.valueForKey(this.name) || '{}');
             /* @non-surge-end */
         }
-        if (isLoon || isSurge || isEgern)
-            this.cache = JSON.parse($persistentStore.read(this.name) || '{}');
+        if (isLoon || isSurge || isEgern) {
+            const rawCache = $persistentStore.read(this.name);
+            this._persistedCache = rawCache || '{}';
+            this.cache = JSON.parse(this._persistedCache);
+        }
         if (isGUIforCores) {
             /* @non-surge-start */
             this.cache = JSON.parse(
@@ -204,7 +207,11 @@ export class OpenAPI {
             }
             /* @non-surge-end */
         }
-        this._rememberPersisted();
+        if (isQX || isGUIforCores || isNode) {
+            /* @non-surge-start */
+            this._rememberPersisted();
+            /* @non-surge-end */
+        }
     }
 
     _rememberPersisted() {
@@ -226,7 +233,10 @@ export class OpenAPI {
         const writeCache = target === 'both' || target === 'cache';
         const writeRoot = (target === 'both' || target === 'root') && isNode;
         if (writeCache) {
-            const data = JSON.stringify(this.cache, null, 2);
+            const data =
+                isLoon || isSurge || isEgern
+                    ? JSON.stringify(this.cache)
+                    : JSON.stringify(this.cache, null, 2);
             if (data !== this._persistedCache) {
                 if (isQX) {
                     /* @non-surge-start */

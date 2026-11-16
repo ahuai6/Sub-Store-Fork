@@ -63,5 +63,6 @@ describe('sub-store bundle graph', function () {
             true,
         );
         expect(includes(core, 'node_modules/peggy/')).to.equal(false);
+        expect(includes(core, 'jsrsasign')).to.equal(false);
     });
 });

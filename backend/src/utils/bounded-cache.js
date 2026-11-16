@@ -124,22 +124,40 @@ export class BoundedCache {
             : null;
         this._batch = batched ? new BatchFlush(() => this._persist()) : null;
         this._seq = 0;
-        this.entries = {};
+        this._loaded = false;
+        this._entries = {};
+    }
+
+    get entries() {
+        this._ensureLoaded();
+        return this._entries;
+    }
+
+    set entries(value) {
+        this._loaded = true;
+        this._entries = value;
+    }
+
+    _ensureLoaded() {
+        if (this._loaded) return;
+        this._loaded = true;
         this._load();
     }
 
     _load() {
         if (this.shards) {
-            this.entries = this.shards.load();
+            this._entries = this.shards.load();
             if (this._dropExpired(false)) this._persist();
             return;
         }
-        if (!this._read(this.storeKey)) {
-            this._write('{}', this.storeKey);
+        const raw = this._read(this.storeKey);
+        if (!raw) {
+            this._entries = {};
+            return;
         }
         try {
-            const parsed = JSON.parse(this._read(this.storeKey));
-            this.entries =
+            const parsed = JSON.parse(raw);
+            this._entries =
                 parsed && typeof parsed === 'object' && !Array.isArray(parsed)
                     ? parsed
                     : {};
@@ -149,15 +167,15 @@ export class BoundedCache {
                     e?.message ?? e
                 }`,
             );
-            this.entries = {};
+            this._entries = {};
             this._write('{}', this.storeKey);
         }
         this._dropExpired(false);
     }
 
     _persist() {
-        if (this.shards) return this.shards.save(this.entries);
-        return this._write(JSON.stringify(this.entries), this.storeKey);
+        if (this.shards) return this.shards.save(this._entries);
+        return this._write(JSON.stringify(this._entries), this.storeKey);
     }
 
     _schedulePersist() {
@@ -175,12 +193,13 @@ export class BoundedCache {
     }
 
     _dropExpired(persist) {
+        this._ensureLoaded();
         const now = this.now();
         let changed = false;
-        for (const id of Object.keys(this.entries)) {
-            const cached = this.entries[id];
+        for (const id of Object.keys(this._entries)) {
+            const cached = this._entries[id];
             if (!cached || !cached.time || this._expires(cached) <= now) {
-                delete this.entries[id];
+                delete this._entries[id];
                 changed = true;
             }
         }
@@ -190,7 +209,14 @@ export class BoundedCache {
 
     revokeAll() {
         if (this._batch) this._batch.reset();
-        this.entries = {};
+        if (this.shards && !this._loaded) {
+            this._entries = {};
+            this._loaded = true;
+            this.shards.clearAll();
+            return;
+        }
+        this._entries = {};
+        this._loaded = true;
         this._persist();
     }
 
@@ -201,11 +227,19 @@ export class BoundedCache {
     }
 
     get(id) {
-        const cached = this.entries[id];
-        if (!(this.resolveTtl() > 0) || !cached || !cached.time) return null;
+        if (!(this.resolveTtl() > 0)) return null;
+        let cached;
+        if (!this._loaded && this.shards) {
+            cached = this.shards.readEntry(id);
+        } else {
+            this._ensureLoaded();
+            cached = this._entries[id];
+        }
+        if (!cached || !cached.time) return null;
         // Expired entries are not reusable, even when id still matches.
         if (this.now() >= this._expires(cached)) {
-            delete this.entries[id];
+            this._ensureLoaded();
+            delete this._entries[id];
             this._schedulePersist();
             return null;
         }
@@ -223,11 +257,11 @@ export class BoundedCache {
         );
         if (!(ttl > 0)) return false;
         const now = this.now();
-        this._seq += 1;
+        const nextSeq = this._seq + 1;
         const entry = {
             time: now + ttl,
             created: now,
-            seq: this._seq,
+            seq: nextSeq,
             data: value,
         };
         const dataBytes = byteLength(value);
@@ -243,19 +277,21 @@ export class BoundedCache {
             );
             return false;
         }
-        this.entries[id] = entry;
+        this._seq = nextSeq;
+        this._ensureLoaded();
+        this._entries[id] = entry;
         this._dropExpired(false);
         if (!this.shards) this._evictOldest();
-        if (!this.entries[id]) return false;
+        if (!this._entries[id]) return false;
         return this._schedulePersist();
     }
 
     _evictOldest() {
-        const overflow = () => byteLength(this.entries) > this.budget;
+        const overflow = () => byteLength(this._entries) > this.budget;
         if (!overflow()) return;
-        const order = Object.keys(this.entries).sort((a, b) => {
-            const left = this.entries[a] || {};
-            const right = this.entries[b] || {};
+        const order = Object.keys(this._entries).sort((a, b) => {
+            const left = this._entries[a] || {};
+            const right = this._entries[b] || {};
             return (
                 (left.seq || left.created || 0) -
                 (right.seq || right.created || 0)
@@ -263,7 +299,7 @@ export class BoundedCache {
         });
         for (const id of order) {
             if (!overflow()) break;
-            delete this.entries[id];
+            delete this._entries[id];
         }
     }
 }

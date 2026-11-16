@@ -134,6 +134,10 @@ need(
     '.github/scripts/fork-frontend/forkRequestGuard.ts',
     'sub-store-fork-api-cap:2',
 );
+forbid('backend/src/utils/rs.js', 'jsrsasign');
+need('backend/src/utils/cache-shards.js', 'readEntry');
+need('backend/src/utils/bounded-cache.js', '_ensureLoaded');
+need('backend/src/utils/yaml.js', 'jsonYamlReplacer');
 
 if (failures.length > 0) {
     for (const message of failures) console.error(`::error::${message}`);
