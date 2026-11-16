@@ -51,7 +51,8 @@ function write(rel, text) {
 
 function patchRedirect() {
     const text = read(REDIRECT_FILE);
-    const lines = text.split('\n');
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
     const index = lines.findIndex((line) => line.includes(REDIRECT_MARKER));
     if (index < 0) {
         fail(
@@ -84,14 +85,14 @@ function patchRedirect() {
         return;
     }
     lines[index] = updated;
-    write(REDIRECT_FILE, lines.join('\n'));
+    write(REDIRECT_FILE, lines.join(eol));
     console.log(`updated ${REDIRECT_FILE}`);
 }
 
 function patchCors() {
     const text = read(CORS_FILE);
     const match = text.match(
-        /export const NON_NODE_CORS_DEFAULT =\n    '([^']*)';/,
+        /export const NON_NODE_CORS_DEFAULT =(\r?\n)    '([^']*)';/,
     );
     if (!match) {
         fail(
@@ -99,7 +100,8 @@ function patchCors() {
         );
         return;
     }
-    const current = match[1];
+    const eol = match[1];
+    const current = match[2];
     const origins = current.split(',');
     const keepsUpstreamPrefix =
         current === UPSTREAM_ORIGINS ||
@@ -120,8 +122,8 @@ function patchCors() {
     }
     // Keep origins upstream added (for example https://sub.xream.eu.org) and
     // append the fork origin. Replacing the whole list would drop them.
-    const needle = `export const NON_NODE_CORS_DEFAULT =\n    '${current}';`;
-    const replacement = `export const NON_NODE_CORS_DEFAULT =\n    '${current},${FORK_ORIGIN}';`;
+    const needle = `export const NON_NODE_CORS_DEFAULT =${eol}    '${current}';`;
+    const replacement = `export const NON_NODE_CORS_DEFAULT =${eol}    '${current},${FORK_ORIGIN}';`;
     if (!text.includes(needle)) {
         fail(`${CORS_FILE} replacement anchor was not found.`);
         return;

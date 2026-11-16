@@ -12,16 +12,17 @@ function createFixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sub-store-bundle-'));
     const fixturePath = path.join(root, 'backend');
 
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
     fs.mkdirSync(fixturePath);
     fs.symlinkSync(
         path.join(backendPath, 'node_modules'),
         path.join(fixturePath, 'node_modules'),
-        'dir',
+        linkType,
     );
     fs.symlinkSync(
         path.join(backendPath, 'src'),
         path.join(fixturePath, 'src'),
-        'dir',
+        linkType,
     );
     fs.copyFileSync(
         path.join(backendPath, 'bundle-esbuild.js'),

@@ -62,6 +62,15 @@ class ModuleArguments(unittest.TestCase):
         with self.assertRaises(SystemExit):
             assert_expected_diff(source, updated, DEFAULT_PUBLIC_REPO)
 
+    def test_preserves_crlf_line_endings_on_windows_checkouts(self):
+        source = (ROOT / 'config/Surge-Beta.sgmodule').read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+        updated = render(source, DEFAULT_PUBLIC_REPO)
+        self.assertIn(b'\r\n', updated)
+        self.assertNotIn(b'\r,', updated)
+        defaults = parse_module_arguments(updated.decode())
+        self.assertEqual(defaults['prefetch_cron'], '50 */6 * * *')
+        assert_expected_diff(source, updated, DEFAULT_PUBLIC_REPO)
+
 
 if __name__ == '__main__':
     unittest.main()

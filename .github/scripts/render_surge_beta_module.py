@@ -66,12 +66,14 @@ def artifact_prefix(public_repo: str) -> str:
 
 
 def render(source: bytes, public_repo: str) -> bytes:
+    eol = b"\r\n" if b"\r\n" in source else b"\n"
+    normalized = source.replace(b"\r\n", b"\n")
     old = UPSTREAM_PREFIX.encode()
     new = artifact_prefix(public_repo).encode()
-    if old not in source:
+    if old not in normalized:
         raise SystemExit(f"upstream artifact prefix not found: {UPSTREAM_PREFIX}")
-    updated = source.replace(old, new)
-    if updated == source:
+    updated = normalized.replace(old, new)
+    if updated == normalized:
         raise SystemExit("replacement produced no changes")
     cors_old = UPSTREAM_CORS_ORIGINS.encode()
     cors_new = FORK_CORS_ORIGINS.encode()
@@ -87,15 +89,23 @@ def render(source: bytes, public_repo: str) -> bytes:
         raise SystemExit(
             "rewritten module still references sub-store-org/Sub-Store"
         )
-    return add_prefetch(widen_core_pattern(disable_sync_by_default(updated)))
+    rendered = add_prefetch(widen_core_pattern(disable_sync_by_default(updated)))
+    return rendered.replace(b"\n", eol) if eol != b"\n" else rendered
 
 
 def _insert_on_prefixed_line(text: str, prefix: str, suffix: str) -> str:
     lines = text.splitlines(keepends=True)
     for index, line in enumerate(lines):
         if line.startswith(prefix):
-            newline = "\n" if line.endswith("\n") else ""
-            body = line[: -1] if newline else line
+            if line.endswith("\r\n"):
+                newline = "\r\n"
+                body = line[:-2]
+            elif line.endswith("\n"):
+                newline = "\n"
+                body = line[:-1]
+            else:
+                newline = ""
+                body = line
             lines[index] = body + suffix + newline
             return "".join(lines)
     raise SystemExit(f"missing line {prefix}")
@@ -295,7 +305,12 @@ def assert_prefetch_disabled_by_default(module_text: str) -> None:
 
 def assert_expected_diff(original: bytes, updated: bytes, public_repo: str) -> str:
     """Reverse every supported fork patch to recover upstream byte for byte."""
-    updated_text = updated.decode("utf-8")
+    original_eol = b"\r\n" if b"\r\n" in original else b"\n"
+    updated_eol = b"\r\n" if b"\r\n" in updated else b"\n"
+    if original_eol != updated_eol:
+        raise SystemExit("line endings changed while rendering Surge-Beta.sgmodule")
+    original_lf = original.replace(b"\r\n", b"\n")
+    updated_text = updated.replace(b"\r\n", b"\n").decode("utf-8")
     assert_prefetch_disabled_by_default(updated_text)
     assert_file_routes_on_core(updated_text)
     comparable = restore_sync_default(restore_core_pattern(strip_prefetch(updated_text))).encode()
@@ -305,7 +320,7 @@ def assert_expected_diff(original: bytes, updated: bytes, public_repo: str) -> s
     restored = comparable.replace(new, old).replace(
         FORK_CORS_ORIGINS.encode(), UPSTREAM_CORS_ORIGINS.encode()
     )
-    if restored != original:
+    if restored != original_lf:
         raise SystemExit(
             "diff is not limited to the artifact URL prefix, the fork CORS origin, the core file pattern, disabled schedule defaults, and the prefetch cron"
         )
@@ -313,7 +328,7 @@ def assert_expected_diff(original: bytes, updated: bytes, public_repo: str) -> s
     # The URL/CORS check ignores the prefetch block. strip_prefetch removes it.
     diff = "".join(
         difflib.unified_diff(
-            original.decode("utf-8").splitlines(keepends=True),
+            original_lf.decode("utf-8").splitlines(keepends=True),
             comparable.decode("utf-8").splitlines(keepends=True),
             fromfile="upstream config/Surge-Beta.sgmodule",
             tofile="Surge-Beta.sgmodule",

@@ -8,6 +8,18 @@ import { describe, it } from 'mocha';
 
 import { prefetchDecision, prefetchNames } from '@/utils/prefetch-cron';
 
+function findPython() {
+    for (const candidate of ['python3', 'python']) {
+        try {
+            execFileSync(candidate, ['--version'], { stdio: 'ignore' });
+            return candidate;
+        } catch {
+            // Try the next executable name.
+        }
+    }
+    throw new Error('Unable to locate python3 or python');
+}
+
 function findRepoRoot() {
     for (const dir of [process.cwd(), path.resolve(process.cwd(), '..')]) {
         if (fs.existsSync(path.join(dir, 'config', 'Surge-Beta.sgmodule'))) {
@@ -82,7 +94,7 @@ describe('Surge prefetch cron', function () {
         const root = findRepoRoot();
         const output = path.join(os.tmpdir(), `surge-beta-prefetch-${process.pid}.sgmodule`);
         execFileSync(
-            'python3',
+            findPython(),
             [
                 path.join(root, '.github/scripts/render_surge_beta_module.py'),
                 '--check',
