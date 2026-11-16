@@ -15,9 +15,13 @@ import {
     applyAgeOutputEncryption,
     resolveShareAgeConfig,
 } from '@/restful/age-output';
-import { findShareToken } from '@/restful/token';
+import {
+    consumeShareTokenForRequest,
+    findShareToken,
+} from '@/restful/token';
 import { maskAgeSecretInUrl } from '@/utils/age';
 import { heavyRequestKey, shareResponse } from '@/utils/inflight';
+import { ENV } from '@/vendor/open-api';
 
 function getMihomoExternalOptions(query) {
     const useMihomoExternal = query.target === 'SurgeMac';
@@ -84,6 +88,24 @@ export default function register($app) {
 }
 
 async function downloadSubscription(req, res) {
+    const isShareRoute = req.path?.startsWith('/share/');
+
+    if (
+        ENV().isSubsCheckPro &&
+        isShareRoute &&
+        !consumeShareTokenForRequest(req, 'sub')
+    ) {
+        failed(
+            res,
+            new RequestInvalidError(
+                'INVALID_SHARE_TOKEN',
+                '分享令牌错误、已过期或已用尽',
+            ),
+            404,
+        );
+        return;
+    }
+
     if (req.__forkHeavy !== 'download-sub') {
         req.__forkHeavy = 'download-sub';
         return shareResponse(
@@ -94,7 +116,6 @@ async function downloadSubscription(req, res) {
         );
     }
     const { name } = req.params;
-    const isShareRoute = req.path?.startsWith('/share/');
 
     const {
         useMihomoExternal,
@@ -501,6 +522,22 @@ async function downloadSubscription(req, res) {
 }
 
 async function downloadCollection(req, res) {
+    if (
+        ENV().isSubsCheckPro &&
+        req.path?.startsWith('/share/') &&
+        !consumeShareTokenForRequest(req, 'col')
+    ) {
+        failed(
+            res,
+            new RequestInvalidError(
+                'INVALID_SHARE_TOKEN',
+                '分享令牌错误、已过期或已用尽',
+            ),
+            404,
+        );
+        return;
+    }
+
     if (req.__forkHeavy !== 'download-collection') {
         req.__forkHeavy = 'download-collection';
         return shareResponse(

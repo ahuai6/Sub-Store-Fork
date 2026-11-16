@@ -426,6 +426,13 @@ function normalizeResponse(response = {}) {
     return normalized;
 }
 
+function sanitizeSurgeProxyName(name) {
+    return name
+        .replace(/[=,]/g, '')
+        .replace(/(^|\s)(?:[#;]|\/\/)+/g, '$1')
+        .trim();
+}
+
 function produce(proxies, targetPlatform, type, opts = {}) {
     const producer = PROXY_PRODUCERS[targetPlatform];
     if (!producer) {
@@ -433,6 +440,9 @@ function produce(proxies, targetPlatform, type, opts = {}) {
     }
 
     const normalizedTarget = String(targetPlatform).toLowerCase();
+    const isSurgeStyleTarget = ['surge', 'surgemac', 'surfboard'].includes(
+        normalizedTarget,
+    );
 
     // filter unsupported proxies
     proxies = proxies.filter((proxy) => {
@@ -546,6 +556,9 @@ function produce(proxies, targetPlatform, type, opts = {}) {
     proxies = proxies.map((proxy) => {
         proxy._resolved = proxy.resolved;
 
+        if (isSurgeStyleTarget && typeof proxy.name === 'string') {
+            proxy.name = sanitizeSurgeProxyName(proxy.name);
+        }
         if (!isNotBlank(proxy.name)) {
             proxy.name = `${proxy.type} ${proxy.server}:${proxy.port}`;
         }
@@ -608,7 +621,10 @@ function produce(proxies, targetPlatform, type, opts = {}) {
             list.push(
                 SurgeMac_Producer().produce(
                     {
-                        name: opts._merged.name,
+                        name:
+                            sanitizeSurgeProxyName(
+                                String(opts._merged.name ?? ''),
+                            ) || 'mihomo merged',
                         type: 'external',
                         udp: true,
                         exec: opts._merged.exec,

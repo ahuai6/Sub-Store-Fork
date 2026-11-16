@@ -22,6 +22,12 @@ const isGUIforCores = SURGE_ONLY ? false : typeof $Plugins !== 'undefined';
 const isSurge = SURGE_ONLY
     ? true
     : typeof $httpClient !== 'undefined' && !isLoon && !isEgern;
+const isSubsCheckPro = SURGE_ONLY
+    ? false
+    : isLoon &&
+      typeof $loon === 'object' &&
+      $loon !== null &&
+      $loon.isSubsCheckPro === true;
 import { Base64 } from 'js-base64';
 
 function isPlainObject(obj) {
@@ -498,6 +504,7 @@ export function ENV() {
         isEgern,
         isLanceX,
         isGUIforCores,
+        isSubsCheckPro,
     };
 }
 
