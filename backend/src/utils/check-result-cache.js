@@ -79,6 +79,7 @@ class CheckResultCache extends BoundedCache {
     constructor() {
         super({
             sharded: true,
+            batched: true,
             storeKey: CHECK_RESULT_CACHE_KEY,
             label: '检查缓存',
             resolveTtl: () => scriptCheckTtlMs(),

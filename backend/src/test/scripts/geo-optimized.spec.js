@@ -363,6 +363,7 @@ describe('optimized geo.js', function () {
         env.cache.sharedCheckSet = (identity, value) =>
             checkCache.set(checkKey(identity), value);
         env.cache.sharedCheckClaim = (identity) => checkCache.claim(identity);
+        env.cache.sharedCheckFlush = () => checkCache.flush();
         const input = [
             { name: 'one', type: 'ss', server: 'a.example', port: 1, password: 'p' },
             { name: 'two', type: 'ss', server: 'a.example', port: 1, password: 'p' },
@@ -774,5 +775,89 @@ describe('optimized geo.js', function () {
         } finally {
             $.write = originalWrite;
         }
+    });
+
+    it('writes sharedCheckClaim results once in batches without double-persisting per node', async function () {
+        const { CHECK_RESULT_CACHE_KEY } = require('@/constants');
+        const { default: $ } = require('@/core/app');
+        const { default: checkCache, checkKey } = require('@/utils/check-result-cache');
+        checkCache.revokeAll();
+        const env = createEnv({ deferPersist: true, settings: { scriptCacheTtl: 3600 } });
+        env.cache.sharedCheckGet = (identity) => checkCache.get(checkKey(identity));
+        env.cache.sharedCheckSet = (identity, value) =>
+            checkCache.set(checkKey(identity), value);
+        env.cache.sharedCheckClaim = (identity) => checkCache.claim(identity);
+        env.cache.sharedCheckFlush = () => checkCache.flush();
+        const originalWrite = $.write.bind($);
+        const writes = [];
+        $.write = (value, key) => {
+            if (key === CHECK_RESULT_CACHE_KEY) writes.push(value);
+            return originalWrite(value, key);
+        };
+        try {
+            const input = Array.from({ length: 30 }, (_, index) => ({
+                name: `n${index}`,
+                type: 'ss',
+                server: `${index}.example`,
+                port: index + 1,
+            }));
+            await runOptimized(input, { cache: true, geo: true }, env);
+            expect(Object.keys(checkCache.entries)).to.have.length(30);
+            expect(writes).to.have.length(2);
+        } finally {
+            $.write = originalWrite;
+            checkCache.revokeAll();
+        }
+    });
+
+    it('treats HTTP status 0 from two_phase probes as unreachable', async function () {
+        const env = createEnv({
+            bodyFor: (node) => ({ status: 0, body: '', node }),
+        });
+        const result = await runOptimized(
+            [{ name: 'zero', type: 'ss', server: 'z.example', port: 1 }],
+            { two_phase: true, geo: true, retries: 0 },
+            env,
+        );
+        expect(env.httpCalls).to.have.length(1);
+        expect(env.httpCalls[0].url).to.include('generate_204');
+        expect(result[0]._geo).to.equal(undefined);
+        expect(result[0].name).to.equal('zero');
+    });
+
+    it('keeps applying keep_last to later budget-skipped nodes if one format throws', async function () {
+        this.timeout(10000);
+        const badNode = { name: 'bad-fmt', type: 'ss', server: null, port: 1 };
+        const goodNode = { name: 'good-fmt', type: 'ss', server: 'g.example', port: 2 };
+        const leadNode = { name: 'lead', type: 'ss', server: 'l.example', port: 3 };
+        const env = createEnv({ delayMs: 40 });
+        const lastGood = wireLastGood(env);
+        const lastGoodId = (node) =>
+            `geo:${require('crypto')
+                .createHash('md5')
+                .update(
+                    `geo:http://ip-api.com/json?lang=zh-CN:{{proxy.server.toUpperCase()}}:undefined:undefined:${JSON.stringify(
+                        node,
+                    )}`,
+                )
+                .digest('hex')}`;
+        lastGood.set(lastGoodId(badNode), { api: { country: 'JP' }, savedAt: Date.now() });
+        lastGood.set(lastGoodId(goodNode), { api: { country: 'SG' }, savedAt: Date.now() });
+        lastGood.flush();
+
+        const output = await runOptimized(
+            [clone(leadNode), clone(badNode), clone(goodNode)],
+            {
+                keep_last: true,
+                geo: true,
+                concurrency: 1,
+                time_budget: 25,
+                format: '{{proxy.server.toUpperCase()}}',
+            },
+            env,
+        );
+        expect(output[1].name).to.equal('bad-fmt');
+        expect(output[2].name).to.equal('G.EXAMPLE');
+        expect(output[2]._geo).to.deep.equal({ country: 'SG' });
     });
 });

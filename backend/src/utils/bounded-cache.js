@@ -31,6 +31,66 @@ function byteLength(value) {
     }
 }
 
+export class BatchFlush {
+    constructor(onFlush, { batchSize = 25, debounceMs = 200 } = {}) {
+        this.onFlush = onFlush;
+        this.batchSize = batchSize;
+        this.debounceMs = debounceMs;
+        this.dirty = false;
+        this.timer = null;
+        this.writesSinceFlush = 0;
+        this.flushing = false;
+    }
+
+    clearTimer() {
+        if (this.timer != null && typeof clearTimeout === 'function') {
+            clearTimeout(this.timer);
+        }
+        this.timer = null;
+    }
+
+    reset() {
+        this.clearTimer();
+        this.dirty = false;
+        this.writesSinceFlush = 0;
+    }
+
+    schedule() {
+        this.dirty = true;
+        this.writesSinceFlush += 1;
+        if (this.writesSinceFlush >= this.batchSize) {
+            this.flush();
+            return;
+        }
+        if (this.timer != null) return;
+        if (typeof setTimeout !== 'function') {
+            this.flush();
+            return;
+        }
+        this.timer = setTimeout(() => {
+            this.timer = null;
+            this.flush();
+        }, this.debounceMs);
+        if (this.timer && typeof this.timer.unref === 'function') {
+            this.timer.unref();
+        }
+    }
+
+    flush() {
+        if (this.flushing) return;
+        this.flushing = true;
+        try {
+            this.clearTimer();
+            this.writesSinceFlush = 0;
+            if (!this.dirty) return;
+            this.dirty = false;
+            this.onFlush();
+        } finally {
+            this.flushing = false;
+        }
+    }
+}
+
 /**
  * Time-bounded persistent map.
  *
@@ -47,6 +107,7 @@ export class BoundedCache {
         read,
         write,
         sharded = false,
+        batched = false,
     }) {
         this.storeKey = storeKey;
         this.resolveTtl = resolveTtl;
@@ -61,6 +122,7 @@ export class BoundedCache {
                   write: this._write,
               })
             : null;
+        this._batch = batched ? new BatchFlush(() => this._persist()) : null;
         this._seq = 0;
         this.entries = {};
         this._load();
@@ -98,6 +160,20 @@ export class BoundedCache {
         return this._write(JSON.stringify(this.entries), this.storeKey);
     }
 
+    _schedulePersist() {
+        if (this._batch) {
+            this._batch.schedule();
+            return true;
+        }
+        return this._persist() !== false;
+    }
+
+    flush() {
+        if (this._batch) {
+            this._batch.flush();
+        }
+    }
+
     _dropExpired(persist) {
         const now = this.now();
         let changed = false;
@@ -113,6 +189,7 @@ export class BoundedCache {
     }
 
     revokeAll() {
+        if (this._batch) this._batch.reset();
         this.entries = {};
         this._persist();
     }
@@ -129,7 +206,7 @@ export class BoundedCache {
         // Expired entries are not reusable, even when id still matches.
         if (this.now() >= this._expires(cached)) {
             delete this.entries[id];
-            this._persist();
+            this._schedulePersist();
             return null;
         }
         return cached.data;
@@ -170,7 +247,7 @@ export class BoundedCache {
         this._dropExpired(false);
         if (!this.shards) this._evictOldest();
         if (!this.entries[id]) return false;
-        return this._persist() !== false;
+        return this._schedulePersist();
     }
 
     _evictOldest() {

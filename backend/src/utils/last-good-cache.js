@@ -1,4 +1,4 @@
-import $ from '@/core/app';
+import { BatchFlush } from '@/utils/bounded-cache';
 import { CacheShards, jsonBytes, SHARD_BYTES } from '@/utils/cache-shards';
 import { LAST_GOOD_CACHE_KEY } from '@/constants';
 
@@ -8,8 +8,6 @@ import { LAST_GOOD_CACHE_KEY } from '@/constants';
 // rejects them at read time, or refresh/clear-cache calls revokeAll().
 // Writes batch like script-resource-cache. Large maps use CacheShards so
 // one value stays under the iOS $persistentStore limit.
-const BATCH = 25;
-const DEBOUNCE_MS = 200;
 
 function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -22,11 +20,8 @@ export class LastGoodCache {
             read: io.read,
             write: io.write,
         });
+        this._batch = new BatchFlush(() => this.shards.save(this.entries));
         this.entries = this.shards.load();
-        this._dirty = false;
-        this._timer = null;
-        this._writesSinceFlush = 0;
-        this._flushing = false;
     }
 
     get(id) {
@@ -50,7 +45,7 @@ export class LastGoodCache {
         if (!Number.isFinite(entry.savedAt)) return false;
         if (jsonBytes([id, entry]) > SHARD_BYTES) return false;
         this.entries[id] = entry;
-        this._schedule();
+        this._batch.schedule();
         return true;
     }
 
@@ -60,52 +55,12 @@ export class LastGoodCache {
     }
 
     flush() {
-        if (this._flushing) return;
-        this._flushing = true;
-        try {
-            this._clearTimer();
-            this._writesSinceFlush = 0;
-            if (!this._dirty) return;
-            this._dirty = false;
-            this.shards.save(this.entries);
-        } finally {
-            this._flushing = false;
-        }
+        this._batch.flush();
     }
 
     _writeThrough() {
-        this._clearTimer();
-        this._dirty = false;
-        this._writesSinceFlush = 0;
+        this._batch.reset();
         this.shards.save(this.entries);
-    }
-
-    _clearTimer() {
-        if (this._timer != null && typeof clearTimeout === 'function') {
-            clearTimeout(this._timer);
-        }
-        this._timer = null;
-    }
-
-    _schedule() {
-        this._dirty = true;
-        this._writesSinceFlush += 1;
-        if (this._writesSinceFlush >= BATCH) {
-            this.flush();
-            return;
-        }
-        if (this._timer != null) return;
-        if (typeof setTimeout !== 'function') {
-            this.flush();
-            return;
-        }
-        this._timer = setTimeout(() => {
-            this._timer = null;
-            this.flush();
-        }, DEBOUNCE_MS);
-        if (this._timer && typeof this._timer.unref === 'function') {
-            this._timer.unref();
-        }
     }
 }
 

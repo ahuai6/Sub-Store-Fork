@@ -140,7 +140,13 @@ async function operator(proxies = [], targetPlatform, context) {
 
     if (started) {
       for (const proxy of proxies) {
-        if (!started.has(proxy)) applyLastGood(proxy, cacheId(proxy))
+        if (!started.has(proxy)) {
+          try {
+            applyLastGood(proxy, cacheId(proxy))
+          } catch (e) {
+            $.error(`[${proxy.name}] ${e.message ?? e}`)
+          }
+        }
       }
     }
 
@@ -253,8 +259,11 @@ async function operator(proxies = [], targetPlatform, context) {
             method: 'get', url: reachabilityUrl, timeout: reachabilityTimeout, retries: 0,
             'policy-descriptor': node, node,
           }, 'reachability')
-          const status = Number(reachable.status || reachable.statusCode || 200)
-          if (status < 200 || status >= 400) throw new Error(`Reachability status: ${status}`)
+          const rawStatus = reachable.status ?? reachable.statusCode
+          const status = rawStatus === '' || rawStatus == null ? 200 : Number(rawStatus)
+          if (!Number.isFinite(status) || status < 200 || status >= 400) {
+            throw new Error(`Reachability status: ${status}`)
+          }
         }
         if (Date.now() >= deadline) throw budgetError()
         const res = await request(proxy, {
@@ -341,14 +350,13 @@ async function operator(proxies = [], targetPlatform, context) {
   }
 
   function remember(id, data, proxy, finishShared) {
-    if (cacheEnabled && proxy && typeof cache.sharedCheckSet === 'function') {
-      try {
-        cache.sharedCheckSet(sharedIdentity(proxy), data)
-      } catch (e) {}
-    }
     if (typeof finishShared === 'function') {
       try {
         finishShared(data)
+      } catch (e) {}
+    } else if (cacheEnabled && proxy && typeof cache.sharedCheckSet === 'function') {
+      try {
+        cache.sharedCheckSet(sharedIdentity(proxy), data)
       } catch (e) {}
     }
     if (!cacheEnabled || !id) return
@@ -417,22 +425,28 @@ async function operator(proxies = [], targetPlatform, context) {
   }
 
   function flushPending() {
-    if (!pending.length) return
-    const items = pending.splice(0, pending.length)
-    if (typeof cache.flush === 'function' && typeof cache.set === 'function') {
-      for (const [id, data] of items) cache.set(id, data)
-      cache.flush()
-      return
-    }
-    const expiry = Date.now() + scriptTtlMs()
-    if (cache && cache.resourceCache && typeof cache._persist === 'function') {
-      for (const [id, data] of items) {
-        cache.resourceCache[id] = { time: expiry, data }
+    if (pending.length) {
+      const items = pending.splice(0, pending.length)
+      if (typeof cache.flush === 'function' && typeof cache.set === 'function') {
+        for (const [id, data] of items) cache.set(id, data)
+        cache.flush()
+      } else {
+        const expiry = Date.now() + scriptTtlMs()
+        if (cache && cache.resourceCache && typeof cache._persist === 'function') {
+          for (const [id, data] of items) {
+            cache.resourceCache[id] = { time: expiry, data }
+          }
+          cache._persist()
+        } else {
+          for (const [id, data] of items) cache.set(id, data)
+        }
       }
-      cache._persist()
-      return
     }
-    for (const [id, data] of items) cache.set(id, data)
+    if (typeof cache.sharedCheckFlush === 'function') {
+      try {
+        cache.sharedCheckFlush()
+      } catch (e) {}
+    }
   }
 
   function scriptTtlMs() {

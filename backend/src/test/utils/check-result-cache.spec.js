@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { afterEach, before, describe, it } from 'mocha';
 
-import { SETTINGS_KEY } from '@/constants';
+import { CHECK_RESULT_CACHE_KEY, SETTINGS_KEY } from '@/constants';
 import { BoundedCache } from '@/utils/bounded-cache';
 
 describe('shared check cache', function () {
@@ -167,5 +167,35 @@ describe('shared check cache', function () {
         });
         expect(tiny.set('big', { blob: 'x'.repeat(80) })).to.equal(false);
         expect(tiny.get('big')).to.equal(null);
+    });
+
+    it('batches writes every 25 sets and flushes through scriptResourceCache', async function () {
+        const originalWrite = $.write.bind($);
+        const writes = [];
+        $.write = (value, key) => {
+            if (key === CHECK_RESULT_CACHE_KEY) writes.push(value);
+            return originalWrite(value, key);
+        };
+        try {
+            for (let i = 0; i < 10; i += 1) {
+                await cache.sharedCheck(
+                    identity({ ...nodeA, port: 1000 + i }),
+                    async () => ({ api: i }),
+                );
+            }
+            expect(writes).to.deep.equal([]);
+            scriptCache.flush();
+            expect(writes).to.have.length(1);
+
+            for (let i = 10; i < 35; i += 1) {
+                await cache.sharedCheck(
+                    identity({ ...nodeA, port: 1000 + i }),
+                    async () => ({ api: i }),
+                );
+            }
+            expect(writes).to.have.length(2);
+        } finally {
+            $.write = originalWrite;
+        }
     });
 });

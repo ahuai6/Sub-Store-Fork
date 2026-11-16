@@ -88,8 +88,9 @@ export class CacheShards {
                 this.encoded.set(key, text);
             }
         }
+        const nextKeys = new Set(keys);
         for (const key of previous) {
-            if (!keys.includes(key)) {
+            if (!nextKeys.has(key)) {
                 if (this.write(null, key) === false) return false;
                 this.encoded.delete(key);
             }

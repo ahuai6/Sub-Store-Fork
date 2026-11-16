@@ -89,4 +89,15 @@ describe('persistent store writes', function () {
         expect(api.read('#cached')).to.equal(undefined);
         expect(api.read('subs').map((item) => item.name)).to.include('edited');
     });
+
+    it('removes a hash key from root.json when write(null, key) is called', function () {
+        api.write('{"shard":1}', '#shard-key');
+        expect(api.read('#shard-key')).to.equal('{"shard":1}');
+        api.write(null, '#shard-key');
+        expect(api.read('#shard-key')).to.equal(undefined);
+        const savedRoot = JSON.parse(
+            fs.readFileSync(path.join(dir, 'root.json'), 'utf8'),
+        );
+        expect(savedRoot).to.not.have.property('shard-key');
+    });
 });

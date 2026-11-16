@@ -251,4 +251,40 @@ describe('final output cache', function () {
         expect(calls).to.deep.equal([1, 1, 1]);
         delete global.calls;
     });
+
+    it('distinguishes preview-file cache keys when file metadata changes', function () {
+        const base = buildOutputMaterial({
+            kind: 'preview-file',
+            raw: 'proxies:\n  - name: hk',
+            name: 'demo',
+            displayName: 'Demo A',
+            produceType: 'mihomoProfile',
+            produceOpts: { mode: 'proxy', source: 'local' },
+            process: [{ type: 'Script Operator' }],
+        });
+        const renamedDisplay = buildOutputMaterial({
+            kind: 'preview-file',
+            raw: 'proxies:\n  - name: hk',
+            name: 'demo',
+            displayName: 'Demo B',
+            produceType: 'mihomoProfile',
+            produceOpts: { mode: 'proxy', source: 'local' },
+            process: [{ type: 'Script Operator' }],
+        });
+        const otherType = buildOutputMaterial({
+            kind: 'preview-file',
+            raw: 'proxies:\n  - name: hk',
+            name: 'demo',
+            displayName: 'Demo A',
+            produceType: 'file',
+            produceOpts: { mode: 'file', source: 'local' },
+            process: [{ type: 'Script Operator' }],
+        });
+        expect(outputMaterialKey(base)).to.not.equal(
+            outputMaterialKey(renamedDisplay),
+        );
+        expect(outputMaterialKey(base)).to.not.equal(
+            outputMaterialKey(otherType),
+        );
+    });
 });

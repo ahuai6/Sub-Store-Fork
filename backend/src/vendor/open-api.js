@@ -282,16 +282,22 @@ export class OpenAPI {
             }
             if (isQX) {
                 /* @non-surge-start */
+                if (data == null) return $prefs.removeValueForKey(key);
                 return $prefs.setValueForKey(data, key);
                 /* @non-surge-end */
             }
             if (isNode) {
                 /* @non-surge-start */
-                this.root[key] = data;
+                if (data == null) {
+                    delete this.root[key];
+                } else {
+                    this.root[key] = data;
+                }
                 /* @non-surge-end */
             }
             if (isGUIforCores) {
                 /* @non-surge-start */
+                if (data == null) return $Plugins.SubStoreCache.remove(key);
                 return $Plugins.SubStoreCache.set(key, data);
                 /* @non-surge-end */
             }

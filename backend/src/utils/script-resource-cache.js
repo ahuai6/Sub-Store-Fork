@@ -1,6 +1,6 @@
 import $ from '@/core/app';
 import { CacheShards, jsonBytes, SHARD_BYTES } from '@/utils/cache-shards';
-import { ttlFromSetting } from '@/utils/bounded-cache';
+import { BatchFlush, ttlFromSetting } from '@/utils/bounded-cache';
 import {
     SCRIPT_RESOURCE_CACHE_KEY,
     DEFAULT_SCRIPT_CACHE_TTL,
@@ -11,28 +11,16 @@ import lastGoodCache from '@/utils/last-good-cache';
 
 // Coalesce the per-node JSON rewrite of #sub-store-cached-script-resource.
 // get/set semantics stay on the in-memory object. The persistent store is
-// updated every BATCH sets, on a short quiet period, and when the request
+// updated every 25 sets, on a short quiet period, and when the request
 // ends. Entries still expire with settings.scriptCacheTtl (default 48h).
 // revokeAll, used by the clear-cache action, writes immediately.
-const BATCH = 25;
-const DEBOUNCE_MS = 200;
 
 class ResourceCache {
     constructor() {
-        this._dirty = false;
-        this._timer = null;
-        this._writesSinceFlush = 0;
-        this._flushing = false;
         this.shards = new CacheShards(SCRIPT_RESOURCE_CACHE_KEY);
+        this._batch = new BatchFlush(() => this._persist());
         this.resourceCache = this.shards.load();
         this._cleanup();
-    }
-
-    _clearTimer() {
-        if (this._timer != null && typeof clearTimeout === 'function') {
-            clearTimeout(this._timer);
-        }
-        this._timer = null;
     }
 
     _cleanup(prefix, ttl) {
@@ -79,45 +67,20 @@ class ResourceCache {
     }
 
     _writeThrough() {
-        this._clearTimer();
-        this._dirty = false;
-        this._writesSinceFlush = 0;
+        this._batch.reset();
         this._persist();
     }
 
     _schedule() {
-        this._dirty = true;
-        this._writesSinceFlush += 1;
-        if (this._writesSinceFlush >= BATCH) {
-            this.flush();
-            return;
-        }
-        if (this._timer != null) return;
-        if (typeof setTimeout !== 'function') {
-            this.flush();
-            return;
-        }
-        this._timer = setTimeout(() => {
-            this._timer = null;
-            this.flush();
-        }, DEBOUNCE_MS);
-        if (this._timer && typeof this._timer.unref === 'function') {
-            this._timer.unref();
-        }
+        this._batch.schedule();
     }
 
     flush() {
-        if (this._flushing) return;
-        this._flushing = true;
+        this._batch.flush();
         try {
-            this._clearTimer();
-            this._writesSinceFlush = 0;
-            if (this._dirty) {
-                this._dirty = false;
-                this._persist();
-            }
-        } finally {
-            this._flushing = false;
+            checkResultCache.flush();
+        } catch (e) {
+            $.error(e?.message ?? e);
         }
         try {
             lastGoodCache.flush();
@@ -206,6 +169,7 @@ cache.sharedCheckSet = (identity, value) =>
 cache.sharedCheckClaim = (identity) => checkResultCache.claim(identity);
 cache.sharedCheck = (identity, producer) =>
     checkResultCache.sharedCheck(identity, producer);
+cache.sharedCheckFlush = () => checkResultCache.flush();
 cache.lastGoodGet = (id) => lastGoodCache.get(id);
 cache.lastGoodSet = (id, value) => lastGoodCache.set(id, value);
 cache.lastGoodFlush = () => lastGoodCache.flush();
