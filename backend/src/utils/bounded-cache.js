@@ -1,4 +1,5 @@
 import $ from '@/core/app';
+import { SURGE_ONLY } from '@/runtime/build-flags';
 import { CacheShards, jsonBytes } from '@/utils/cache-shards';
 
 // One $persistentStore value is capped at 4 MB on Surge iOS. Stay under that
@@ -62,6 +63,8 @@ export class BatchFlush {
             this.flush();
             return;
         }
+        // Surge ends the script in $done(); a debounced timer would be cut off.
+        if (SURGE_ONLY) return;
         if (this.timer != null) return;
         if (typeof setTimeout !== 'function') {
             this.flush();

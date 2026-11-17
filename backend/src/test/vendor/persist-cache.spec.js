@@ -207,7 +207,22 @@ describe('persistent store writes', function () {
         expect(stringifyCalls).to.equal(0);
         expect(storeWrites).to.deep.equal([]);
 
+        // Pretty-printed on-disk JSON still skips an unchanged rewrite.
+        backing['sub-store'] = JSON.stringify(
+            { subs: [{ name: 's1' }] },
+            null,
+            2,
+        );
+        storeWrites.length = 0;
+        stringifyCalls = 0;
+        runSurge((instance) => {
+            instance.write([{ name: 's1' }], 'subs');
+        });
+        expect(storeWrites).to.deep.equal([]);
+
         // Unchanged write on compact store skips $persistentStore.write.
+        backing['sub-store'] = JSON.stringify({ subs: [{ name: 's1' }] });
+        storeWrites.length = 0;
         runSurge((instance) => {
             instance.write([{ name: 's1' }], 'subs');
         });

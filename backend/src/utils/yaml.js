@@ -51,7 +51,45 @@ function normalizeParseOptions(options) {
     };
 }
 
-function normalizeStringifyOptions(options = {}) {
+// A unique proxy list stays well under this. A shared diamond does not:
+// aliasDuplicateObjects:false expands it (depth 18 was 29MB / 2.6s here, and
+// deeper graphs run until the script is killed) and a cycle overflows the
+// stack instead of returning. Count expanded objects in linear time and alias
+// only past the limit, so ordinary shared fields stay duplicated.
+const YAML_EXPAND_OBJECT_LIMIT = 65536;
+
+function expandedObjectCount(value) {
+    const memo = new Map();
+    function size(node, stack) {
+        if (node === null || typeof node !== 'object') return 0;
+        if (stack.has(node)) return Infinity;
+        const cached = memo.get(node);
+        if (cached !== undefined) return cached;
+        stack.add(node);
+        let total = 1;
+        const children = Array.isArray(node) ? node : Object.values(node);
+        for (const child of children) {
+            const nested = size(child, stack);
+            if (!Number.isFinite(nested)) {
+                stack.delete(node);
+                memo.set(node, Infinity);
+                return Infinity;
+            }
+            total += nested;
+            if (total > YAML_EXPAND_OBJECT_LIMIT) {
+                stack.delete(node);
+                memo.set(node, total);
+                return total;
+            }
+        }
+        stack.delete(node);
+        memo.set(node, total);
+        return total;
+    }
+    return size(value, new Set());
+}
+
+function normalizeStringifyOptions(options = {}, content) {
     const {
         forceQuotes,
         lineWidth,
@@ -61,10 +99,17 @@ function normalizeStringifyOptions(options = {}) {
         sortKeys,
         ...rest
     } = options || {};
-    const normalized = {
-        aliasDuplicateObjects: typeof noRefs === 'boolean' ? !noRefs : false,
-        ...rest,
-    };
+    // noRefs omitted: duplicate shared objects (JSON normalization, no anchors)
+    // until the expanded graph would stall produce/preview. Callers that pass
+    // noRefs still choose explicitly.
+    const normalized = { ...rest };
+    if (typeof noRefs === 'boolean') {
+        normalized.aliasDuplicateObjects = !noRefs;
+    } else {
+        const expanded = expandedObjectCount(content);
+        normalized.aliasDuplicateObjects =
+            !Number.isFinite(expanded) || expanded > YAML_EXPAND_OBJECT_LIMIT;
+    }
 
     if (typeof lineWidth === 'number') {
         normalized.lineWidth = lineWidth <= 0 ? 0 : lineWidth;
@@ -99,7 +144,7 @@ function stringify(content, options) {
     return stringifyYaml(
         content,
         jsonYamlReplacer,
-        normalizeStringifyOptions(options),
+        normalizeStringifyOptions(options, content),
     );
 }
 

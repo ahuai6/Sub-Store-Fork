@@ -45,4 +45,24 @@ describe('YAML helper without redundant copies', function () {
         });
         expect(dump({ x: 'ok' })).to.equal('x: ok\n');
     });
+
+    it('aliases shared graphs instead of expanding them', function () {
+        let node = { v: 1 };
+        for (let i = 0; i < 20; i += 1) node = { a: node, b: node };
+        const started = Date.now();
+        const out = dump(node);
+        expect(Date.now() - started).to.be.below(200);
+        expect(out.length).to.be.below(4000);
+        expect(out).to.include('*a');
+    });
+
+    it('aliases cycles instead of blowing the stack', function () {
+        const node = { name: 'n' };
+        node.self = node;
+        const started = Date.now();
+        const out = dump(node);
+        expect(Date.now() - started).to.be.below(200);
+        expect(out).to.include('*a');
+        expect(load(out).self.name).to.equal('n');
+    });
 });
