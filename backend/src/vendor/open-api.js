@@ -237,7 +237,16 @@ export class OpenAPI {
                 isLoon || isSurge || isEgern
                     ? JSON.stringify(this.cache)
                     : JSON.stringify(this.cache, null, 2);
-            if (data !== this._persistedCache) {
+            let equivalent = data === this._persistedCache;
+            if (!equivalent && (isLoon || isSurge || isEgern)) {
+                try {
+                    equivalent =
+                        data === JSON.stringify(JSON.parse(this._persistedCache));
+                } catch (e) {
+                    equivalent = false;
+                }
+            }
+            if (!equivalent) {
                 if (isQX) {
                     /* @non-surge-start */
                     $prefs.setValueForKey(data, this.name);
@@ -262,6 +271,8 @@ export class OpenAPI {
                     );
                     /* @non-surge-end */
                 }
+                this._persistedCache = data;
+            } else if (isLoon || isSurge || isEgern) {
                 this._persistedCache = data;
             }
         }
