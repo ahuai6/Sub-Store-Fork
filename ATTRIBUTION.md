@@ -10,7 +10,7 @@ This branch is the Sub-Store front end, built so GitHub Pages can serve it at <h
 
 The front end is GPL-3.0. Backend artifacts on the `main` branch of this repository are a separate Sub-Store build and stay under AGPL-3.0. This branch does not replace that license.
 
-The corresponding source of the upstream project is the commit above. This build also applies the patches in `.github/scripts/prepare_frontend_pages.py` from ahuai6/Sub-Store-Fork (patch stamp `subpath-routes-1-surge-session-1-repo-pages-1`). Those patches include the Pages subpath fixes and a Surge session guard: API calls are queued to 2, and a reloaded or restored page does not start a heavy preview until the next user action. The build configuration applied on top of that commit is:
+The corresponding source of the upstream project is the commit above. This build also applies the patches in `.github/scripts/prepare_frontend_pages.py` from ahuai6/Sub-Store-Fork (patch stamp `subpath-routes-1-surge-session-2-repo-pages-1`). Those patches include the Pages subpath fixes and a Surge session guard: API calls are queued to 2, and a reloaded or restored page does not start a heavy preview until the next user action. The build configuration applied on top of that commit is:
 
 1. Vite `base` / `VITE_PUBLIC_PATH` = `/Sub-Store-Fork/`
 2. `VITE_API_URL` = `https://sub.store` (upstream `.env.production` already uses this URL)
