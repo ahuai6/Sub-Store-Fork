@@ -10,7 +10,7 @@ This branch is the Sub-Store front end, built so GitHub Pages can serve it at <h
 
 The front end is GPL-3.0. Backend artifacts on the `main` branch of this repository are a separate Sub-Store build and stay under AGPL-3.0. This branch does not replace that license.
 
-The corresponding source of the upstream project is the commit above. This build also applies the patches in `.github/scripts/prepare_frontend_pages.py` from ahuai6/Sub-Store-Fork (patch stamp `subpath-routes-1-surge-session-2-repo-pages-1`). Those patches include the Pages subpath fixes and a Surge session guard: API calls are queued to 2, and a reloaded or restored page does not start a heavy preview until the next user action. The build configuration applied on top of that commit is:
+The corresponding source of the upstream project is the commit above. This build also applies the patches in `.github/scripts/prepare_frontend_pages.py` from ahuai6/Sub-Store-Fork (patch stamp `subpath-routes-2-pwa-autoupdate-1-surge-session-3-repo-pages-1`). Those patches include the Pages subpath fixes and a Surge session guard: API calls are queued to 2, and a reloaded or restored page does not start a heavy preview until the next user action. The build configuration applied on top of that commit is:
 
 1. Vite `base` / `VITE_PUBLIC_PATH` = `/Sub-Store-Fork/`
 2. `VITE_API_URL` = `https://sub.store` (upstream `.env.production` already uses this URL)
@@ -23,7 +23,10 @@ The corresponding source of the upstream project is the commit above. This build
 9. `canFetchFlowsForCurrentPage` strips `import.meta.env.BASE_URL` from `window.location.pathname` before comparing it with `/subs`, so subscription traffic and expiry still load under the Pages subpath
 10. The load-failed `href="/aboutUs"` links are `router-link` targets, so Vue Router resolves them inside the history base
 11. The copied API link is `new URL(import.meta.env.BASE_URL, window.location.origin)`, so it opens this Pages site instead of the domain root
-12. Axios requests are queued to 2 (`sub-store-fork-api-cap:2`) so a Surge webview page leaves one of the 3 script sessions free
-13. `POST /api/preview/*` is skipped after a reload, back/forward restore, or bfcache `pageshow` until the next pointer, touch, or key action (`sub-store-fork-skip-restored-preview`)
+12. `PreviewPanel.vue` prefixes `/preview` with `import.meta.env.BASE_URL` so raw text preview opens under the Pages subpath instead of hitting a root 404
+13. VitePWA uses `registerType: "autoUpdate"` (`skipWaiting` + `clientsClaim`) so iOS PWAs pick up new deployments automatically instead of staying pinned to an old waiting worker
+14. Axios requests (and `FilePreview.vue` raw downloads via `queuedPreviewGet`) share a 3-tier priority queue capped at 2 (`sub-store-fork-api-cap:2`), prioritizing interactive requests over `/api/sub/flow` and deferring queued flow queries while the page is hidden
+15. `POST /api/preview/*` is skipped after a reload, back/forward restore, or bfcache `pageshow` until the next pointer, touch, or key action (`sub-store-fork-skip-restored-preview`)
+16. `index.html` adds a `<link rel="preconnect">` to the API origin and CSS `content-visibility:auto` on `.compare-table-body .compare-table-row` for smoother large-table rendering
 
 Source commit: https://github.com/sub-store-org/Sub-Store-Front-End/tree/59632bfcba5193fcf213b545e025252007ca15aa
