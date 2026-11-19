@@ -267,11 +267,11 @@ function resolvePreviewTimeout(explicitTimeout?: number): number {
   return DEFAULT_PREVIEW_TIMEOUT;
 }
 
-export async function queuedPreviewGet<T = any>(
-  client: { get: (url: string, config?: any) => Promise<T> },
+export async function queuedPreviewGet(
+  client: { get: (url: string, config?: any) => Promise<any> },
   url: string,
   config: ForkConfig & Record<string, any> = {},
-): Promise<T> {
+): Promise<any> {
   await acquireApiSlot(config.signal, config.cancelToken, {
     priority: 2,
     deferWhileHidden: false,
