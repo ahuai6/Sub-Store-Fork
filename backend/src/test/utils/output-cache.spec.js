@@ -369,4 +369,125 @@ describe('final output cache', function () {
             delete global.__previewNoCacheCounter;
         }
     });
+
+    it('ignores UI, sync, and log settings in the output cache key', function () {
+        const baseSettings = {
+            resourceCacheTtl: 3600,
+            syncTime: 1000,
+            theme: { auto: true },
+            appearanceSetting: { isSimpleMode: false },
+            logsMaxCount: 0,
+            githubUser: 'alice',
+            artifactSyncBatchSize: 5,
+        };
+        const changedSettings = {
+            ...baseSettings,
+            syncTime: 999999,
+            theme: { auto: false },
+            appearanceSetting: { isSimpleMode: true },
+            logsMaxCount: 500,
+            githubUser: 'bob',
+            artifactSyncBatchSize: 20,
+        };
+        const state = { [SETTINGS_KEY]: baseSettings };
+        $.read = (key) => state[key];
+        const keyA = outputMaterialKey(material(NODE));
+        state[SETTINGS_KEY] = changedSettings;
+        const keyB = outputMaterialKey(material(NODE));
+        expect(keyB).to.equal(keyA);
+
+        // Changing a setting that affects proxy output still invalidates the key.
+        state[SETTINGS_KEY] = { ...changedSettings, defaultProxy: 'DIRECT' };
+        const keyC = outputMaterialKey(material(NODE));
+        expect(keyC).to.not.equal(keyA);
+    });
+
+    it('skips ProxyUtils.parse on outputCache hit and parses once on fresh network fetch', async function () {
+        const { ProxyUtils } = require('@/core/proxy-utils');
+        const resourceCache = require('@/utils/resource-cache').default;
+        const headersResourceCache =
+            require('@/utils/headers-resource-cache').default;
+        const { getFlowHeaders } = require('@/utils/flow');
+        const http = require('http');
+
+        const clashYaml = `proxies:\n  - { name: HK-1, type: ss, server: 1.1.1.1, port: 443, cipher: aes-128-gcm, password: secret }\n`;
+        let httpHits = 0;
+        const server = http.createServer((req, res) => {
+            httpHits += 1;
+            res.writeHead(200, {
+                'Content-Type': 'text/yaml',
+                'subscription-userinfo':
+                    'upload=10; download=20; total=100; expire=4102444800',
+            });
+            res.end(clashYaml);
+        });
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const { port } = server.address();
+        const url = `http://127.0.0.1:${port}/sub.yaml`;
+
+        const state = {
+            [SETTINGS_KEY]: {
+                resourceCacheTtl: 3600,
+                headersCacheTtl: 3600,
+                defaultFlowUserAgent: 'FlowUA/1.0',
+            },
+            [SUBS_KEY]: [
+                {
+                    name: 'remote-clash',
+                    source: 'remote',
+                    url,
+                    ua: 'CustomSubUA/2.0',
+                    process: [],
+                },
+            ],
+        };
+        $.read = (key) =>
+            Object.prototype.hasOwnProperty.call(state, key) ? state[key] : null;
+        $.write = (val, key) => {
+            state[key] = val;
+            return true;
+        };
+
+        let parseCalls = 0;
+        const originalParse = ProxyUtils.parse;
+        ProxyUtils.parse = function (...args) {
+            parseCalls += 1;
+            return originalParse.apply(this, args);
+        };
+        try {
+            resourceCache.revokeAll();
+            headersResourceCache.revokeAll();
+
+            // Cold miss: fetches once and parses proxies only ONCE (reused from download validation).
+            const first = await produceArtifact({
+                type: 'subscription',
+                name: 'remote-clash',
+                platform: 'Surge',
+            });
+            expect(httpHits).to.equal(1);
+            expect(parseCalls).to.equal(1);
+            expect(first).to.include('HK-1');
+
+            // Warm hit: resourceCache + outputCache hit -> ZERO HTTP, ZERO ProxyUtils.parse.
+            const second = await produceArtifact({
+                type: 'subscription',
+                name: 'remote-clash',
+                platform: 'Surge',
+            });
+            expect(second).to.equal(first);
+            expect(httpHits).to.equal(1);
+            expect(parseCalls).to.equal(1);
+
+            // P9: download backfilled headersResourceCache under defaultFlowUserAgent, so
+            // getFlowHeaders hits cache with ZERO additional HTTP requests.
+            const flow = await getFlowHeaders(url);
+            expect(flow).to.include('total=100');
+            expect(httpHits).to.equal(1);
+        } finally {
+            ProxyUtils.parse = originalParse;
+            resourceCache.revokeAll();
+            headersResourceCache.revokeAll();
+            await new Promise((resolve) => server.close(resolve));
+        }
+    });
 });

@@ -135,6 +135,61 @@ const surgeOnlyStripPlugin = {
     },
 };
 
+// Peggy grammars are precompiled into parsers/peggy/generated/*.js at build
+// time; the raw grammar template strings are only needed by precompile-peggy.js
+// and unit tests. Stripping them here keeps the source files intact while
+// removing ~58 KB of unused DSL strings from every runtime bundle.
+const PEGGY_GRAMMAR_RE = /export const grammars = String\.raw`[\s\S]*?\r?\n`;/;
+const stripPeggyGrammarPlugin = {
+    name: 'strip-peggy-grammar',
+    setup(build) {
+        build.onLoad(
+            { filter: /[\\/]parsers[\\/]peggy[\\/](surge|loon|qx)\.js$/ },
+            async (args) => {
+                const contents = await fs.promises.readFile(args.path, 'utf8');
+                if (!PEGGY_GRAMMAR_RE.test(contents)) {
+                    throw new Error(
+                        `strip-peggy-grammar: expected grammars template in ${args.path}`,
+                    );
+                }
+                return {
+                    contents: contents.replace(
+                        PEGGY_GRAMMAR_RE,
+                        "export const grammars = '';",
+                    ),
+                    loader: 'js',
+                };
+            },
+        );
+    },
+};
+
+// age-encryption resolves @noble/curves & @noble/hashes 2.2.0 while
+// @noble/post-quantum declares ~2.0.0, causing pnpm to place two copies in
+// bundles. Redirect both to age-encryption's single newer 2.x copy without
+// touching upstream package.json or pnpm-lock.yaml.
+const ageEncryptionDir = fs.realpathSync(
+    path.join(__dirname, 'node_modules', 'age-encryption'),
+);
+const dedupeNoblePlugin = {
+    name: 'dedupe-noble',
+    setup(build) {
+        build.onResolve(
+            { filter: /^@noble\/(curves|hashes)(\/|$)/ },
+            async (args) => {
+                if (args.pluginData?.dedupeNoble) return null;
+                const resolved = await build.resolve(args.path, {
+                    kind: args.kind,
+                    resolveDir: ageEncryptionDir,
+                    pluginData: { dedupeNoble: true },
+                });
+                if (resolved.errors?.length || !resolved.path) return null;
+                return resolved;
+            },
+        );
+    },
+};
+
 const SURGE_BUNDLE_ABSENT = [
     'undici',
     'shoutrrr',
@@ -148,6 +203,8 @@ const SURGE_BUNDLE_ABSENT = [
     '$prefs',
     'stash-version',
     'KJUR',
+    '// global initializer',
+    '// per-parser initializer',
 ];
 // sub-store-0 no longer pulls ProxyUtils. Producers stay in sub-store-1.
 const SURGE_SIMPLE_PRESENT = [
@@ -176,7 +233,28 @@ function assertBundleText(file, { absent = [], present = [] }) {
     }
 }
 
-function assertSurgeOnlyBundles() {
+function assertNobleDeduplicated(metafiles) {
+    for (const pkg of ['curves', 'hashes']) {
+        const versions = new Set();
+        const re = new RegExp(`@noble\\+${pkg}@([^/\\\\_]+)`);
+        for (const metafile of metafiles) {
+            for (const input of Object.keys(metafile.inputs || {})) {
+                const match = input.match(re);
+                if (match) versions.add(match[1]);
+            }
+        }
+        if (versions.size > 1) {
+            throw new Error(
+                `dedupe-noble failed: bundled multiple @noble/${pkg} versions: ${[
+                    ...versions,
+                ].join(', ')}`,
+            );
+        }
+    }
+}
+
+function assertSurgeOnlyBundles(metafiles) {
+    assertNobleDeduplicated(metafiles);
     assertBundleText(path.join(__dirname, 'dist/sub-store-0.min.js'), {
         absent: [...SURGE_BUNDLE_ABSENT, 'ProxyUtils'],
         present: SURGE_SIMPLE_PRESENT,
@@ -241,8 +319,17 @@ function assertSurgeOnlyBundles() {
             inject: [objectHasOwnPolyfill],
             define: artifact.surgeOnly ? surgeOnlyDefine : dynamicHostDefine,
             plugins: artifact.surgeOnly
-                ? [nodeBuiltinExternalPlugin, surgeOnlyStripPlugin]
-                : [nodeBuiltinExternalPlugin],
+                ? [
+                      nodeBuiltinExternalPlugin,
+                      dedupeNoblePlugin,
+                      stripPeggyGrammarPlugin,
+                      surgeOnlyStripPlugin,
+                  ]
+                : [
+                      nodeBuiltinExternalPlugin,
+                      dedupeNoblePlugin,
+                      stripPeggyGrammarPlugin,
+                  ],
             metafile: true,
         });
         browserMetafiles.push(browserBuild.metafile);
@@ -266,7 +353,11 @@ function assertSurgeOnlyBundles() {
             outfile: artifact.dest,
             inject: [objectHasOwnPolyfill],
             define: dynamicHostDefine,
-            plugins: [nodeBuiltinExternalPlugin],
+            plugins: [
+                nodeBuiltinExternalPlugin,
+                dedupeNoblePlugin,
+                stripPeggyGrammarPlugin,
+            ],
             metafile: true,
         });
         browserMetafiles.push(browserBuild.metafile);
@@ -331,7 +422,7 @@ ${fs.readFileSync(path.join(__dirname, 'dist/sub-store.bundle.js'), {
             2,
         )}\n`,
     );
-    assertSurgeOnlyBundles();
+    assertSurgeOnlyBundles(browserMetafiles);
 })()
     .catch((e) => {
         console.error(e);

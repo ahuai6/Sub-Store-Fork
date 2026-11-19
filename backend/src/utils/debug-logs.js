@@ -1,8 +1,10 @@
 import { DEFAULT_LOGS_MAX_COUNT, LOGS_KEY, SETTINGS_KEY } from '@/constants';
+import { SURGE_ONLY } from '@/runtime/build-flags';
 
 const DEFAULT_LOG_LIMIT = 200;
 const MAX_LOGS_MAX_COUNT = 10000;
 const LOGS_MAX_COUNT_CACHE_TTL_MS = 1000;
+const LOG_FLUSH_BATCH_SIZE = 50;
 const LOG_LEVELS = ['log', 'info', 'warn', 'error', 'debug'];
 const DEFAULT_LOG_SCOPE = 'unknown';
 const SUB_STORE_BANNER_VERSION_RE = /^Sub-Store\s+--\s+v\d+(?:\.\d+){0,3}$/;
@@ -24,6 +26,41 @@ let consoleCaptureInstalled = false;
 let isAppendingConsoleLog = false;
 let cachedLogsMaxCount = null;
 let cachedLogsMaxCountExpiresAt = 0;
+let pendingLogEntries = [];
+let pendingLogStore = null;
+let pendingLogMaxCount = null;
+let logBatchingOverride = null;
+
+function shouldBatchLogs() {
+    if (typeof logBatchingOverride === 'boolean') return logBatchingOverride;
+    return SURGE_ONLY;
+}
+
+export function setLogBatchingEnabled(enabled) {
+    logBatchingOverride = typeof enabled === 'boolean' ? enabled : null;
+}
+
+export function flushLogEntries($) {
+    if (pendingLogEntries.length === 0) return;
+    const store = $ || pendingLogStore;
+    const batch = pendingLogEntries;
+    const fallbackMaxCount = pendingLogMaxCount;
+    pendingLogEntries = [];
+    pendingLogStore = null;
+    pendingLogMaxCount = null;
+    if (!store) return;
+    try {
+        const maxCount = getCachedLogsMaxCount(store);
+        if (maxCount === 0) return;
+        const limit =
+            maxCount > 0 ? maxCount : fallbackMaxCount || DEFAULT_LOG_LIMIT;
+        const logs = readLogEntries(store);
+        logs.push(...batch);
+        persistLogEntries(store, logs.slice(-limit));
+    } catch {
+        // Logging must never break the caller or recursively log failures.
+    }
+}
 
 export function prependConsoleTimestamp(args, { isNode } = {}) {
     const consoleArgs = Array.from(args || []);
@@ -109,14 +146,31 @@ export function appendLogEntry($, level, args) {
         const message = formatLogArguments(args);
         if (shouldIgnoreLogMessage(message)) return;
 
-        const logs = readLogEntries($);
         const normalizedLevel = normalizeLogLevel(level);
-        logs.push({
+        const entry = {
             id: createLogId(),
             time: Date.now(),
             level: normalizedLevel,
             message: normalizeStoredLogMessage(message, normalizedLevel),
-        });
+        };
+        if (shouldBatchLogs()) {
+            if (pendingLogStore && pendingLogStore !== $) {
+                flushLogEntries(pendingLogStore);
+            }
+            pendingLogStore = $;
+            pendingLogMaxCount = maxCount;
+            pendingLogEntries.push(entry);
+            if (pendingLogEntries.length > maxCount) {
+                pendingLogEntries = pendingLogEntries.slice(-maxCount);
+            }
+            if (pendingLogEntries.length >= LOG_FLUSH_BATCH_SIZE) {
+                flushLogEntries($);
+            }
+            return;
+        }
+
+        const logs = readLogEntries($);
+        logs.push(entry);
         persistLogEntries($, logs.slice(-maxCount));
     } catch {
         // Logging must never break the caller or recursively log failures.
@@ -129,6 +183,7 @@ export function clearLogSettingsCache() {
 }
 
 export function getLogEntries($, query = {}) {
+    flushLogEntries($);
     const settings = $.read(SETTINGS_KEY) || {};
     const maxCount = normalizeLogsMaxCount(settings.logsMaxCount);
     if (maxCount === 0) {
@@ -171,6 +226,9 @@ export function getLogEntries($, query = {}) {
 }
 
 export function clearLogEntries($) {
+    pendingLogEntries = [];
+    pendingLogStore = null;
+    pendingLogMaxCount = null;
     persistLogEntries($, []);
 }
 

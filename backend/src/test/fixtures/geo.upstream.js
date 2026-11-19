@@ -1,4 +1,4 @@
-/* Unmodified snapshot of https://github.com/xream/scripts/blob/main/surge/modules/sub-store-scripts/check/geo.js for output comparison. Kept in this private repo; not published. */
+/* Unmodified snapshot of https://github.com/xream/scripts/blob/main/surge/modules/sub-store-scripts/check/geo.js (blob SHA 1d573206451a140b3ba3964b07f7de392e7e5ccd) for output comparison in tests. */
 /**
  * 节点信息(适配 Surge/Loon 版 也可在任意平台上使用 HTTP API)
  *

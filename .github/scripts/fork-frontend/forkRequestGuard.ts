@@ -1,10 +1,15 @@
 // Surge webview allows 3 concurrent script sessions. A refresh does not
 // stop a script that is already running, so this page keeps at most 2 API
-// calls in flight and does not start a heavy preview until the user acts
-// on a reloaded or restored page.
+// calls in flight, prioritizes interactive actions over background traffic
+// queries, pauses queued background flow fetches while the page is hidden,
+// and does not start a heavy preview until the user acts on a reloaded or
+// restored page.
 
 const MARKER = 'sub-store-fork-api-cap:2';
 const SKIP = 'sub-store-fork-skip-restored-preview';
+const DEFAULT_PREVIEW_TIMEOUT = 50000;
+
+export type ForkApiPriority = 0 | 1 | 2;
 
 type CancelTokenLike = {
   promise?: Promise<unknown>;
@@ -18,6 +23,9 @@ type ForkConfig = {
   __forkApiSlot?: boolean;
   __forkAdapterWrapped?: boolean;
   __forkRelease?: () => void;
+  method?: string;
+  url?: string;
+  timeout?: number;
   signal?: AbortSignal;
   cancelToken?: CancelTokenLike;
   adapter?: AdapterFn | unknown;
@@ -33,8 +41,42 @@ type Queueable = {
   };
 };
 
+interface ApiWaiter {
+  priority: ForkApiPriority;
+  seq: number;
+  deferWhileHidden: boolean;
+  grant: () => void;
+}
+
 let activeApiRequests = 0;
-const apiWaiters: Array<() => void> = [];
+let waiterSeq = 0;
+const apiWaiters: ApiWaiter[] = [];
+
+const HIGH_PRIORITY_PATH_RE =
+  /\/(?:api\/(?:preview\/|sync\/|utils\/(?:refresh|backup)|storage|sort\/|age\/|file\/)|download\/|share\/)/i;
+const LOW_PRIORITY_FLOW_RE = /\/api\/sub\/flow(?:\/|\?|#|$)/i;
+
+export function resolveApiPriority(config?: Pick<ForkConfig, 'method' | 'url'>): ForkApiPriority {
+  const method = String(config?.method || 'GET').toUpperCase();
+  const url = String(config?.url || '');
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    return 2;
+  }
+  if (HIGH_PRIORITY_PATH_RE.test(url)) {
+    return 2;
+  }
+  if (LOW_PRIORITY_FLOW_RE.test(url)) {
+    return 0;
+  }
+  return 1;
+}
+
+function isPageHidden(): boolean {
+  return (
+    typeof document !== 'undefined' &&
+    document.visibilityState === 'hidden'
+  );
+}
 
 function navigationType() {
   try {
@@ -64,6 +106,17 @@ if (typeof window !== 'undefined') {
   window.addEventListener('keydown', allowHeavyPreview, true);
 }
 
+if (
+  typeof document !== 'undefined' &&
+  typeof document.addEventListener === 'function'
+) {
+  document.addEventListener('visibilitychange', () => {
+    if (!isPageHidden()) {
+      drainApiWaiters();
+    }
+  });
+}
+
 export function blockRestoredHeavyPreview() {
   return blockHeavyPreview;
 }
@@ -90,15 +143,42 @@ function canceledError(reason?: unknown) {
   return Object.assign(error, { code: 'ERR_CANCELED' });
 }
 
+function pickNextWaiterIndex(): number {
+  const hidden = isPageHidden();
+  let bestIndex = -1;
+  for (let i = 0; i < apiWaiters.length; i++) {
+    const waiter = apiWaiters[i];
+    if (hidden && waiter.deferWhileHidden) continue;
+    if (
+      bestIndex === -1 ||
+      waiter.priority > apiWaiters[bestIndex].priority ||
+      (waiter.priority === apiWaiters[bestIndex].priority &&
+        waiter.seq < apiWaiters[bestIndex].seq)
+    ) {
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}
+
+export function drainApiWaiters() {
+  while (activeApiRequests < forkApiCap()) {
+    const index = pickNextWaiterIndex();
+    if (index === -1) break;
+    const [next] = apiWaiters.splice(index, 1);
+    next.grant();
+  }
+}
+
 function releaseSlotCount() {
   activeApiRequests = Math.max(0, activeApiRequests - 1);
-  const next = apiWaiters.shift();
-  if (next) next();
+  drainApiWaiters();
 }
 
 function acquireApiSlot(
   signal?: AbortSignal,
   cancelToken?: CancelTokenLike,
+  options?: { priority?: ForkApiPriority; deferWhileHidden?: boolean },
 ) {
   if (signal?.aborted) {
     return Promise.reject(canceledError(signal.reason));
@@ -106,7 +186,12 @@ function acquireApiSlot(
   if (cancelToken?.reason) {
     return Promise.reject(canceledError(cancelToken.reason));
   }
-  if (activeApiRequests < forkApiCap()) {
+  const priority = options?.priority ?? 1;
+  const deferWhileHidden = Boolean(options?.deferWhileHidden);
+  if (
+    activeApiRequests < forkApiCap() &&
+    !(deferWhileHidden && isPageHidden())
+  ) {
     activeApiRequests += 1;
     return Promise.resolve();
   }
@@ -115,23 +200,28 @@ function acquireApiSlot(
     const cleanup = () => {
       signal?.removeEventListener('abort', onAbort);
     };
-    const grant = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      activeApiRequests += 1;
-      resolve();
+    const waiter: ApiWaiter = {
+      priority,
+      seq: ++waiterSeq,
+      deferWhileHidden,
+      grant: () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        activeApiRequests += 1;
+        resolve();
+      },
     };
     const onCancel = (reason?: unknown) => {
       if (settled) return;
       settled = true;
       cleanup();
-      const index = apiWaiters.indexOf(grant);
+      const index = apiWaiters.indexOf(waiter);
       if (index !== -1) apiWaiters.splice(index, 1);
       reject(canceledError(reason));
     };
     const onAbort = () => onCancel(signal?.reason);
-    apiWaiters.push(grant);
+    apiWaiters.push(waiter);
     signal?.addEventListener('abort', onAbort, { once: true });
     cancelToken?.promise?.then(
       (reason) => onCancel(reason),
@@ -160,6 +250,44 @@ function resolveAdapter(config: ForkConfig, service: Queueable): AdapterFn | nul
   return typeof raw === 'function' ? (raw as AdapterFn) : null;
 }
 
+function resolvePreviewTimeout(explicitTimeout?: number): number {
+  if (
+    typeof explicitTimeout === 'number' &&
+    Number.isFinite(explicitTimeout) &&
+    explicitTimeout > 0
+  ) {
+    return explicitTimeout;
+  }
+  try {
+    const stored = Number(globalThis.localStorage?.getItem('apiRequestTimeout'));
+    if (Number.isFinite(stored) && stored > 0) return stored;
+  } catch {
+    // localStorage may be unavailable in restricted webviews.
+  }
+  return DEFAULT_PREVIEW_TIMEOUT;
+}
+
+export async function queuedPreviewGet<T = any>(
+  client: { get: (url: string, config?: any) => Promise<T> },
+  url: string,
+  config: ForkConfig & Record<string, any> = {},
+): Promise<T> {
+  await acquireApiSlot(config.signal, config.cancelToken, {
+    priority: 2,
+    deferWhileHidden: false,
+  });
+  try {
+    return await client.get(url, {
+      ...config,
+      timeout: resolvePreviewTimeout(
+        typeof config.timeout === 'number' ? config.timeout : undefined,
+      ),
+    });
+  } finally {
+    releaseSlotCount();
+  }
+}
+
 export function installForkApiQueue(service: Queueable) {
   service.interceptors.request.use(async (config: ForkConfig) => {
     const baseAdapter = resolveAdapter(config, service);
@@ -167,7 +295,11 @@ export function installForkApiQueue(service: Queueable) {
       if (!config.__forkAdapterWrapped) {
         config.__forkAdapterWrapped = true;
         config.adapter = async (cfg: ForkConfig) => {
-          await acquireApiSlot(cfg.signal, cfg.cancelToken);
+          const priority = resolveApiPriority(cfg);
+          await acquireApiSlot(cfg.signal, cfg.cancelToken, {
+            priority,
+            deferWhileHidden: priority === 0,
+          });
           let released = false;
           const release = () => {
             if (released) return;
@@ -184,7 +316,11 @@ export function installForkApiQueue(service: Queueable) {
       return config;
     }
 
-    await acquireApiSlot(config.signal, config.cancelToken);
+    const priority = resolveApiPriority(config);
+    await acquireApiSlot(config.signal, config.cancelToken, {
+      priority,
+      deferWhileHidden: priority === 0,
+    });
     let released = false;
     const release = () => {
       if (released) return;

@@ -8,6 +8,7 @@ import {
 } from '@/constants';
 import checkResultCache, { checkKey } from '@/utils/check-result-cache';
 import lastGoodCache from '@/utils/last-good-cache';
+import { flushLogEntries } from '@/utils/debug-logs';
 
 // Coalesce the per-node JSON rewrite of #sub-store-cached-script-resource.
 // get/set semantics stay on the in-memory object. The persistent store is
@@ -21,6 +22,8 @@ class ResourceCache {
         this._batch = new BatchFlush(() => this._persist());
         this._loaded = false;
         this._resourceCache = {};
+        this._dirty = new Set();
+        this._deleted = new Set();
     }
 
     get resourceCache() {
@@ -31,12 +34,28 @@ class ResourceCache {
     set resourceCache(value) {
         this._loaded = true;
         this._resourceCache = value;
+        this._dirty.clear();
+        this._deleted.clear();
+    }
+
+    _applyPendingOverlay(base) {
+        for (const id of this._deleted) {
+            delete base[id];
+        }
+        for (const id of this._dirty) {
+            if (Object.prototype.hasOwnProperty.call(this._resourceCache, id)) {
+                base[id] = this._resourceCache[id];
+            }
+        }
+        this._dirty.clear();
+        this._deleted.clear();
+        return base;
     }
 
     _ensureLoaded() {
         if (this._loaded) return;
         this._loaded = true;
-        this._resourceCache = this.shards.load();
+        this._resourceCache = this._applyPendingOverlay(this.shards.load());
         this._cleanup();
     }
 
@@ -59,6 +78,8 @@ class ResourceCache {
     }
 
     revokeAll() {
+        this._dirty.clear();
+        this._deleted.clear();
         if (!this._loaded) {
             this._batch.reset();
             this._resourceCache = {};
@@ -86,6 +107,42 @@ class ResourceCache {
 
     _persist() {
         const now = Date.now();
+        if (!this._loaded) {
+            const dirtyMap = {};
+            const deleteList = new Set(this._deleted);
+            for (const id of this._dirty) {
+                const cached = this._resourceCache[id];
+                const expiry = effectiveExpiry(cached);
+                if (!expiry || expiry <= now) {
+                    delete this._resourceCache[id];
+                    deleteList.add(id);
+                } else {
+                    dirtyMap[id] = cached;
+                }
+            }
+            let ok = true;
+            let fallback = false;
+            if (Object.keys(dirtyMap).length > 0) {
+                const res = this.shards.writeEntries(dirtyMap);
+                if (res === null) fallback = true;
+                else ok = res !== false;
+            }
+            if (ok && !fallback && deleteList.size > 0) {
+                const res = this.shards.deleteEntries([...deleteList]);
+                if (res === null) fallback = true;
+                else ok = res !== false;
+            }
+            if (!fallback) {
+                if (ok) {
+                    this._dirty.clear();
+                    this._deleted.clear();
+                }
+                return;
+            }
+            this._ensureLoaded();
+        }
+        this._dirty.clear();
+        this._deleted.clear();
         for (const [id, cached] of Object.entries(this._resourceCache)) {
             const expiry = effectiveExpiry(cached);
             if (!expiry || expiry <= now) delete this._resourceCache[id];
@@ -116,11 +173,18 @@ class ResourceCache {
         }
     }
 
+    _readCached(id) {
+        if (this._loaded) return this._resourceCache[id];
+        if (this._deleted.has(id)) return undefined;
+        if (Object.prototype.hasOwnProperty.call(this._resourceCache, id)) {
+            return this._resourceCache[id];
+        }
+        return this.shards.readEntry(id);
+    }
+
     gettime(id) {
         if (!(getTTL() > 0)) return null;
-        const cached = this._loaded
-            ? this._resourceCache[id]
-            : this.shards.readEntry(id);
+        const cached = this._readCached(id);
         const time = effectiveExpiry(cached);
         if (time && Date.now() < time) {
             return time;
@@ -131,13 +195,18 @@ class ResourceCache {
     get(id, ttl, remove) {
         if (!(getTTL() > 0)) return null;
         const resolvedTTL = normalizeTTL(ttl) ?? 0;
-        const cached = this._loaded
-            ? this._resourceCache[id]
-            : this.shards.readEntry(id);
+        const cached = this._readCached(id);
         const time = effectiveExpiry(cached);
         if (time) {
             if (Date.now() + resolvedTTL < time) return cached.data;
             if (remove) {
+                if (!this._loaded && this.shards.isSharded()) {
+                    delete this._resourceCache[id];
+                    this._dirty.delete(id);
+                    this._deleted.add(id);
+                    this._writeThrough();
+                    return null;
+                }
                 this._ensureLoaded();
                 delete this._resourceCache[id];
                 this._writeThrough();
@@ -156,6 +225,13 @@ class ResourceCache {
             data: value,
         };
         if (jsonBytes([id, entry]) > SHARD_BYTES) return;
+        if (!this._loaded && this.shards.isSharded()) {
+            this._resourceCache[id] = entry;
+            this._dirty.add(id);
+            this._deleted.delete(id);
+            this._schedule();
+            return;
+        }
         this._ensureLoaded();
         this._resourceCache[id] = entry;
         this._schedule();
@@ -207,6 +283,11 @@ function wrapDone(fn) {
         } catch (e) {
             $.error(e?.message ?? e);
         }
+        try {
+            flushLogEntries($);
+        } catch {
+            // Never block $done on log flush.
+        }
         return fn.apply(this, args);
     };
     wrapped.__scriptCacheFlush = true;
@@ -233,6 +314,11 @@ export function bindScriptCacheFlush(res) {
             cache.flush();
         } catch (e) {
             $.error(e?.message ?? e);
+        }
+        try {
+            flushLogEntries($);
+        } catch {
+            // Never block response completion on log flush.
         }
     };
     res.on('finish', flush);

@@ -9,7 +9,9 @@
 
 | 位置 | 职责 |
 | --- | --- |
-| `sub-store-org/Sub-Store` 的 `master` | 后端上游来源 |
+| `sub-store-org/Sub-Store` 的 `master` | 后端上游来源（`sync-upstream.yml` 每日自动同步） |
+| `sub-store-org/Sub-Store-Front-End` | 前端上游来源，GPL-3.0，不 vendoring（`publish-frontend.yml` 每日构建并套用锚点补丁） |
+| `xream/scripts` 的 `check/geo.js` | `geo.js` 上游来源，GPL-3.0，由 `sync-upstream.yml` 的 `check_geo_upstream.py` 每日非阻塞比对 `GEO-NOTICE.md` 记录的 blob SHA |
 | `upstream` | 上游原样镜像，只允许快进，不放 fork 改动 |
 | `main` | 上游代码 + 已审核的 fork 修改 |
 | `sync/upstream` | 冲突时的同步 PR 分支，已有解决提交时不强推 |
@@ -61,6 +63,15 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
    `backend/package.json` 变化、重套 fork 补丁，或刷新了已提交模块时，再
    dispatch `publish-dist`。其他 main 提交由 publish-dist 的 schedule 在 SHA
    变化后发布。不要把“每日取上游”和“每日必须发布”混成一件事。
+5. 末尾以 `if: always()` + `continue-on-error: true` 执行 `.github/scripts/check_geo_upstream.py`，比对 `xream/scripts` 仓库中 `surge/modules/sub-store-scripts/check/geo.js` 的当前 blob SHA 与 `scripts/check/GEO-NOTICE.md` 的记录值；若上游有更新则发 `::notice::` 并将差异提示写入 Job Summary，不阻塞后端同步。
+
+### 三上游协同策略速查
+
+| 上游 | 工作流 | 失败/漂移行为 | 升级动作 |
+| --- | --- | --- | --- |
+| 后端 `sub-store-org/Sub-Store` | `sync-upstream.yml`（04:17 UTC） | 冲突开 `sync/upstream` PR；检查失败开 `sync/tests-failed` PR；锚点失败写 Job Summary 并中止 | 解决冲突后用 **Create a merge commit** 合入 `main`，必要时 Run `publish-dist` |
+| 前端 `sub-store-org/Sub-Store-Front-End` | `publish-frontend.yml`（05:23 UTC） | `prepare_frontend_pages.py` 锚点消失或 `check_dist` 失败时直接中止，不覆盖 `gh-pages` | 更新 `prepare_frontend_pages.py` 锚点与 `PATCH_STAMP` 后 Run `publish-frontend` |
+| `geo.js` `xream/scripts` | `sync-upstream.yml`（`check_geo_upstream.py`） | 非阻塞 `::notice::` + Job Summary | 对比上游改动，按需移植到 `scripts/check/geo.js`，同步更新 `backend/src/test/fixtures/geo.upstream.js` 与 `scripts/check/GEO-NOTICE.md` |
 
 同步 PR 合入 `main` 时必须使用 merge commit。规则见下文「收到上游同步 PR 后的处理流程」。
 
@@ -88,15 +99,15 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
 | 区域 | 要保留的行为 |
 | --- | --- |
 | 页面与 CORS | 非 Node `/` 指向 `https://ahuai6.github.io/Sub-Store-Fork/`；默认 origin 含 `https://ahuai6.github.io` |
-| 前端构建补丁 | Pages 子路径 `/Sub-Store-Fork/` 与 PWA；API 并发最多 2；刷新/恢复后重型预览等用户操作再开始 |
+| 前端构建补丁 | Pages 子路径 `/Sub-Store-Fork/`（含 `/preview`、流量页、关于页、复制链接）与 PWA `autoUpdate`（`skipWaiting`+`clientsClaim`）；3 级优先级 API 队列上限 2（后台挂起 `/api/sub/flow`、`FilePreview` 走 `queuedPreviewGet`）；刷新/恢复后重型预览等用户操作再开始；`index.html` 含 API `preconnect` 与大表 `content-visibility:auto` |
 | 请求去重 | preview/download/node-info 同 realm 内共享；不能声称跨 Surge 独立脚本会话共享 |
-| 输出缓存 | `resourceCacheTtl`，相关 noCache/noOutputCache，过期完整重算，响应转换和加密正常运行 |
+| 输出缓存与解析 | `resourceCacheTtl`，相关 noCache/noOutputCache，过期完整重算，响应转换和加密正常运行；非 `raw` 命中资源缓存走 `deferPreprocess`，冷拉复用 `returnParsed` 消除双重解析；排除 UI/同步/日志无关设置并对大文本摘要 |
 | 检测与脚本缓存 | `scriptCacheTtl`；geo 的 cache 关闭后重测；仅运行中的请求可共享 |
-| 资源与流量头缓存 | 各自全局 TTL，0 禁用读写；新条目跟随缩短后的有效期 |
-| 存储分片 | 旧布局可读；迁移不延长 TTL；单值按 UTF-8 计数；clear-cache 清所有已登记分片 |
-| geo operator | 参数/格式兼容，20 并发、预算控制、可选两阶段与目标去重；`keep_last` 默认关闭，开启后失败才沿用上次成功，且该存储不受 `scriptCacheTtl` 过期，刷新仍清除；随许可证和来源说明发布 |
-| 编译与冷启动 | getFlag 匹配器只编译一次；Peggy 预编译，语法源保留；sub-store-0 不引入 ProxyUtils |
-| 路由和写入 | file 路由在 sub-store-1，模块匹配同步；Node 单文件写入，脚本缓存批量 flush |
+| 资源与流量头缓存 | 各自全局 TTL，0 禁用读写；新条目跟随缩短后的有效期；下载响应头自动回填 `defaultFlowUserAgent + originalUrl` 流量头缓存 |
+| 存储分片 | `#sub-store-cached-resource`、`script-resource`、`output`、`check`、`last-good` 均接入分片；旧布局可读；迁移不延长 TTL；单值按 UTF-8 计数；冷启动懒读与 O(1) 增量写入/删除；clear-cache 清所有已登记分片 |
+| geo operator | 参数/格式兼容，20 并发、预算控制、同步缓存预扫描、可选两阶段与目标去重、`keep_last` 与 `prioritize_stale` 轮换调度、单行汇总日志；`keep_last` 默认关闭且不受 `scriptCacheTtl` 过期，刷新仍清除；随许可证和来源说明发布，并监测 `xream/scripts` 漂移 |
+| 编译与冷启动 | getFlag 匹配器只编译一次；Peggy 预编译（语法源保留，打包期 `stripPeggyGrammarPlugin` 剥离无用 DSL）；`dedupeNoblePlugin` 去重 `@noble/*`；`sub-store-0` 不引入 `ProxyUtils` |
+| 路由、容错与日志 | 纯文件元数据路由（`/api/files`、`/api/wholeFiles`、`/api/wholeFile/:name`，注册时不写 store）在 `sub-store-0`，`/api/file/:name`、`/share/file/:name` 与完整 file 兼容路由在 `sub-store-1`，模块匹配同步；`express.js` 非 Node 路由容错加固（400 非法 JSON、Promise 拒绝捕获、大小写无关 header、安全 query 解码）；`SURGE_ONLY` 调试日志批量刷盘；Node 单文件写入，脚本缓存批量 flush |
 | Surge 构建开关 | 仅 Surge 两个 bundle 剥离其他宿主适配器；完整保留其他格式导出与其他宿主源码 |
 | 模块生成 | 上游原文件不动；公开 URL、CORS、路由、默认关闭任务和参数由 renderer 重套、检查，并写入 `dist/Surge-Beta.sgmodule` |
 | 发布 | Release 只上传明确列出的资产，不打包整个目录，不上传 Actions artifact，不推 `main` |

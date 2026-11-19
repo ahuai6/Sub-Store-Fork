@@ -57,7 +57,7 @@ UPSTREAM_CORE_PATTERN = (
 )
 FORK_CORE_PATTERN = (
     r"pattern=^https?:\/\/sub\.store\/((download)|share\/file(?:\/|\?|#|$)|"
-    r"api\/((?:files|wholeFiles|wholeFile|file)(?:\/|\?|#|$)|preview|sync|(?:utils\/node-info)))"
+    r"api\/(file(?:\/|\?|#|$)|preview|sync|(?:utils\/node-info)))"
 )
 
 
@@ -189,16 +189,16 @@ def assert_file_routes_on_core(module_text: str) -> None:
         "https://sub.store/api/sync/artifacts",
         "https://sub.store/api/utils/node-info",
         "https://sub.store/api/file/foo",
-        "https://sub.store/api/files",
-        "https://sub.store/api/files?x=1",
-        "https://sub.store/api/wholeFile/a",
-        "https://sub.store/api/wholeFiles",
         "https://sub.store/share/file/a",
         "https://sub.store/share/file/a?x=1",
     ]
     must_not = [
         "https://sub.store/api/utils/env",
         "https://sub.store/api/subs",
+        "https://sub.store/api/files",
+        "https://sub.store/api/files?x=1",
+        "https://sub.store/api/wholeFile/a",
+        "https://sub.store/api/wholeFiles",
         "https://sub.store/api/filesomething",
         "https://sub.store/share/sub/a",
         "https://sub.store/api/artifact/a",

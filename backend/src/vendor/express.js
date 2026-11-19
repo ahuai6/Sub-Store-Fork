@@ -10,6 +10,7 @@ import {
 import scriptResourceCache, {
     bindScriptCacheFlush,
 } from '@/utils/script-resource-cache';
+import { flushLogEntries } from '@/utils/debug-logs';
 
 export default function express({ substore: $, port, host }) {
     const { isNode } = ENV();
@@ -137,20 +138,16 @@ export default function express({ substore: $, port, host }) {
         'DELETE',
         'PATCH',
         'OPTIONS',
-        "HEAD'",
+        'HEAD',
         'ALL',
     ];
 
     // dispatch url to route
     const dispatch = (request, start = 0) => {
         let { method, url, headers, body } = request;
-        headers = formatHeaders(headers);
-        if (/json/i.test(headers['content-type'])) {
-            body = JSON.parse(body);
-        }
-
-        method = method.toUpperCase();
-        const { path, query } = extractURL(url);
+        headers = formatHeaders(headers || {});
+        method = (method || 'GET').toUpperCase();
+        const { path, query } = extractURL(url || '/');
         const cors = applyCors(headers.origin, method);
         if (!cors.allowed) {
             const res = Response();
@@ -162,9 +159,34 @@ export default function express({ substore: $, port, host }) {
             res.status(200).end();
             return;
         }
+        if (/json/i.test(headers['content-type'])) {
+            if (typeof body === 'string') {
+                if (body.trim() === '') {
+                    body = {};
+                } else {
+                    try {
+                        body = JSON.parse(body);
+                    } catch (err) {
+                        const res = Response(cors.headers);
+                        res.status(400).json({
+                            status: 'failed',
+                            error: {
+                                code: 'INVALID_JSON',
+                                type: 'Invalid JSON Body',
+                                message: err?.message ?? `${err}`,
+                            },
+                        });
+                        return;
+                    }
+                }
+            } else if (body == null) {
+                body = {};
+            }
+        }
 
         // pattern match
         let handler = null;
+        let matchedIndex = -1;
         let i;
         let longestMatchedPattern = 0;
         for (i = start; i < handlers.length; i++) {
@@ -173,6 +195,7 @@ export default function express({ substore: $, port, host }) {
                 if (patternMatched(pattern, path)) {
                     if (pattern.split('/').length > longestMatchedPattern) {
                         handler = handlers[i];
+                        matchedIndex = i;
                         longestMatchedPattern = pattern.split('/').length;
                     }
                 }
@@ -181,7 +204,7 @@ export default function express({ substore: $, port, host }) {
         if (handler) {
             // dispatch to next handler
             const next = () => {
-                dispatch(method, url, i);
+                dispatch(request, matchedIndex + 1);
             };
             const req = {
                 method,
@@ -202,14 +225,13 @@ export default function express({ substore: $, port, host }) {
                 });
             };
 
-            if (cb.constructor.name === 'AsyncFunction') {
-                cb(req, res, next).catch(errFunc);
-            } else {
-                try {
-                    cb(req, res, next);
-                } catch (err) {
-                    errFunc(err);
+            try {
+                const ret = cb(req, res, next);
+                if (ret && typeof ret.then === 'function') {
+                    ret.catch(errFunc);
                 }
+            } catch (err) {
+                errFunc(err);
             }
         } else {
             // no route, return 404
@@ -273,6 +295,7 @@ export default function express({ substore: $, port, host }) {
             302: 'HTTP/1.1 302 Found',
             307: 'HTTP/1.1 307 Temporary Redirect',
             308: 'HTTP/1.1 308 Permanent Redirect',
+            400: 'HTTP/1.1 400 Bad Request',
             403: 'HTTP/1.1 403 Forbidden',
             404: 'HTTP/1.1 404 Not Found',
             500: 'HTTP/1.1 500 Internal Server Error',
@@ -286,6 +309,11 @@ export default function express({ substore: $, port, host }) {
             send(body = '') {
                 try {
                     scriptResourceCache.flush();
+                } catch (e) {
+                    // The response still has to be delivered.
+                }
+                try {
+                    flushLogEntries($);
                 } catch (e) {
                     // The response still has to be delivered.
                 }
@@ -320,12 +348,23 @@ export default function express({ substore: $, port, host }) {
             }
 
             set(key, val) {
+                const target = `${key}`.toLowerCase();
+                for (const existing of Object.keys(headers)) {
+                    if (existing.toLowerCase() === target && existing !== key) {
+                        delete headers[existing];
+                    }
+                }
                 headers[key] = val;
                 return this;
             }
 
             removeHeader(key) {
-                delete headers[key];
+                const target = `${key}`.toLowerCase();
+                for (const existing of Object.keys(headers)) {
+                    if (existing.toLowerCase() === target) {
+                        delete headers[existing];
+                    }
+                }
                 return this;
             }
         })();
@@ -376,19 +415,37 @@ function patternMatched(pattern, path) {
     return false;
 }
 
+function safeDecodeURIComponent(value) {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value;
+    }
+}
+
 function extractURL(url) {
     // extract path
-    const match = url.match(/https?:\/\/[^/]+(\/[^?]*)/) || [];
+    const match = url.match(/https?:\/\/[^/]+(\/[^?#]*)/) || [];
     const path = match[1] || '/';
 
     // extract query string
-    const split = url.indexOf('?');
+    const hashIndex = url.indexOf('#');
+    const urlWithoutHash = hashIndex === -1 ? url : url.slice(0, hashIndex);
+    const split = urlWithoutHash.indexOf('?');
     const query = {};
     if (split !== -1) {
-        let hashes = url.slice(url.indexOf('?') + 1).split('&');
+        const hashes = urlWithoutHash.slice(split + 1).split('&');
         for (let i = 0; i < hashes.length; i++) {
-            const hash = hashes[i].split('=');
-            query[hash[0]] = decodeURIComponent(hash[1]);
+            const pair = hashes[i];
+            if (!pair) continue;
+            const eq = pair.indexOf('=');
+            if (eq === -1) {
+                query[safeDecodeURIComponent(pair)] = '';
+            } else {
+                const key = safeDecodeURIComponent(pair.slice(0, eq));
+                const value = safeDecodeURIComponent(pair.slice(eq + 1));
+                if (key) query[key] = value;
+            }
         }
     }
     return {
@@ -412,7 +469,7 @@ function extractPathParams(pattern, path) {
                 while (path[j] !== '/' && j < path.length) {
                     val.push(path[j++]);
                 }
-                params[key.join('')] = decodeURIComponent(val.join(''));
+                params[key.join('')] = safeDecodeURIComponent(val.join(''));
             } else {
                 if (pattern[i] !== path[j]) {
                     return null;

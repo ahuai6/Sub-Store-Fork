@@ -1,5 +1,6 @@
 import $ from '@/core/app';
 import { ttlFromSetting } from '@/utils/bounded-cache';
+import { CacheShards, jsonBytes, SHARD_BYTES } from '@/utils/cache-shards';
 import {
     RESOURCE_CACHE_KEY,
     DEFAULT_CACHE_TTL,
@@ -8,8 +9,11 @@ import {
 
 class ResourceCache {
     constructor() {
+        this.shards = new CacheShards(RESOURCE_CACHE_KEY);
         this._loaded = false;
         this._resourceCache = {};
+        this._dirty = new Set();
+        this._deleted = new Set();
     }
 
     get resourceCache() {
@@ -20,31 +24,28 @@ class ResourceCache {
     set resourceCache(value) {
         this._loaded = true;
         this._resourceCache = value;
+        this._dirty.clear();
+        this._deleted.clear();
+    }
+
+    _applyPendingOverlay(base) {
+        for (const id of this._deleted) {
+            delete base[id];
+        }
+        for (const id of this._dirty) {
+            if (Object.prototype.hasOwnProperty.call(this._resourceCache, id)) {
+                base[id] = this._resourceCache[id];
+            }
+        }
+        this._dirty.clear();
+        this._deleted.clear();
+        return base;
     }
 
     _ensureLoaded() {
         if (this._loaded) return;
         this._loaded = true;
-        const raw = $.read(RESOURCE_CACHE_KEY);
-        if (!raw) {
-            this._resourceCache = {};
-            return;
-        }
-        try {
-            const parsed = JSON.parse(raw);
-            this._resourceCache =
-                parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-                    ? parsed
-                    : {};
-        } catch (e) {
-            $.error(
-                `解析持久化缓存中的 ${RESOURCE_CACHE_KEY} 失败, 重置为 {}, 错误: ${
-                    e?.message ?? e
-                }`,
-            );
-            this._resourceCache = {};
-            $.write('{}', RESOURCE_CACHE_KEY);
-        }
+        this._resourceCache = this._applyPendingOverlay(this.shards.load());
         this._cleanup();
     }
 
@@ -67,19 +68,76 @@ class ResourceCache {
     }
 
     revokeAll() {
+        this._dirty.clear();
+        this._deleted.clear();
+        if (!this._loaded) {
+            this._resourceCache = {};
+            this._loaded = true;
+            this.shards.clearAll();
+            return;
+        }
         this._loaded = true;
         this._resourceCache = {};
         this._persist();
     }
 
     _persist() {
-        $.write(JSON.stringify(this._resourceCache), RESOURCE_CACHE_KEY);
+        const now = Date.now();
+        if (!this._loaded) {
+            const dirtyMap = {};
+            const deleteList = new Set(this._deleted);
+            for (const id of this._dirty) {
+                const cached = this._resourceCache[id];
+                const expiry = effectiveExpiry(cached);
+                if (!expiry || expiry <= now) {
+                    delete this._resourceCache[id];
+                    deleteList.add(id);
+                } else {
+                    dirtyMap[id] = cached;
+                }
+            }
+            let ok = true;
+            let fallback = false;
+            if (Object.keys(dirtyMap).length > 0) {
+                const res = this.shards.writeEntries(dirtyMap);
+                if (res === null) fallback = true;
+                else ok = res !== false;
+            }
+            if (ok && !fallback && deleteList.size > 0) {
+                const res = this.shards.deleteEntries([...deleteList]);
+                if (res === null) fallback = true;
+                else ok = res !== false;
+            }
+            if (!fallback) {
+                if (ok) {
+                    this._dirty.clear();
+                    this._deleted.clear();
+                }
+                return;
+            }
+            this._ensureLoaded();
+        }
+        this._dirty.clear();
+        this._deleted.clear();
+        for (const [id, cached] of Object.entries(this._resourceCache)) {
+            const expiry = effectiveExpiry(cached);
+            if (!expiry || expiry <= now) delete this._resourceCache[id];
+        }
+        this.shards.save(this._resourceCache);
+    }
+
+    _readCached(id) {
+        if (this._loaded) return this._resourceCache[id];
+        if (this._deleted.has(id)) return undefined;
+        if (Object.prototype.hasOwnProperty.call(this._resourceCache, id)) {
+            return this._resourceCache[id];
+        }
+        return this.shards.readEntry(id);
     }
 
     gettime(id) {
         if (!(getTTL() > 0)) return null;
-        this._ensureLoaded();
-        const cached = this._resourceCache[id];
+        const cached = this._readCached(id);
         const time = effectiveExpiry(cached);
         if (time && Date.now() < time) {
             return time;
@@ -89,13 +147,20 @@ class ResourceCache {
 
     get(id, ttl, remove) {
         if (!(getTTL() > 0)) return null;
-        this._ensureLoaded();
         const resolvedTTL = normalizeTTL(ttl) ?? 0;
-        const cached = this._resourceCache[id];
+        const cached = this._readCached(id);
         const time = effectiveExpiry(cached);
         if (time) {
             if (Date.now() + resolvedTTL < time) return cached.data;
             if (remove) {
+                if (!this._loaded && this.shards.isSharded()) {
+                    delete this._resourceCache[id];
+                    this._dirty.delete(id);
+                    this._deleted.add(id);
+                    this._persist();
+                    return null;
+                }
+                this._ensureLoaded();
                 delete this._resourceCache[id];
                 this._persist();
             }
@@ -105,13 +170,23 @@ class ResourceCache {
 
     set(id, value, ttl) {
         if (!(getTTL() > 0)) return;
-        this._ensureLoaded();
         const resolvedTTL = Math.min(normalizeTTL(ttl) ?? getTTL(), getTTL());
-        this._resourceCache[id] = {
-            time: Date.now() + resolvedTTL,
-            created: Date.now(),
+        const now = Date.now();
+        const entry = {
+            time: now + resolvedTTL,
+            created: now,
             data: value,
         };
+        if (jsonBytes([id, entry]) > SHARD_BYTES) return;
+        if (!this._loaded && this.shards.isSharded()) {
+            this._resourceCache[id] = entry;
+            this._dirty.add(id);
+            this._deleted.delete(id);
+            this._persist();
+            return;
+        }
+        this._ensureLoaded();
+        this._resourceCache[id] = entry;
         this._persist();
     }
 }

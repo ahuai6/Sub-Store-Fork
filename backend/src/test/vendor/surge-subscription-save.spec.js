@@ -435,4 +435,78 @@ describe('Surge subscription save', function () {
         expect(stored.subs[0].name).to.equal('restored');
         expect(stored.subs[0].displayName).to.equal('Restored Legacy');
     });
+
+    it('returns 400 with CORS headers on invalid JSON and preserves query values containing "=" on Surge', async function () {
+        const subs = makeSubs('before');
+        const seeded = seedStore(subs, { complete: true });
+
+        const badJson = await runBundle(simpleCode, {
+            request: {
+                method: 'PATCH',
+                url: 'http://sub.store/api/sub/demo',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Origin: 'https://ahuai6.github.io',
+                },
+                body: '{invalid-json',
+            },
+            store: seeded.store,
+        });
+        expect(badJson.doneCalls).to.have.length(1);
+        const badRes = badJson.doneCalls[0].response;
+        expect(badRes.status).to.equal(400);
+        expect(badRes.headers['Access-Control-Allow-Origin']).to.equal(
+            'https://ahuai6.github.io',
+        );
+        expect(JSON.parse(badRes.body).error.code).to.equal('INVALID_JSON');
+
+        // Case-insensitive Content-Type replacement + query with "=" and malformed percent encoding
+        const rawSub = await runBundle(simpleCode, {
+            request: {
+                method: 'GET',
+                url: 'http://sub.store/api/sub/demo?raw=1&expr=a=b&bad=%ZZ',
+                headers: {},
+            },
+            store: seeded.store,
+        });
+        expect(rawSub.doneCalls).to.have.length(1);
+        const rawRes = rawSub.doneCalls[0].response;
+        expect(rawRes.status).to.equal(200);
+        const ctKeys = Object.keys(rawRes.headers).filter(
+            (k) => k.toLowerCase() === 'content-type',
+        );
+        expect(ctKeys).to.have.length(1);
+        expect(rawRes.headers[ctKeys[0]]).to.equal('application/json');
+    });
+
+    it('serves /api/wholeFiles on sub-store-0 and batches Surge debug log persistence to one write', async function () {
+        const subs = makeSubs('before');
+        const seeded = seedStore(subs, { complete: true });
+        const storeObj = JSON.parse(seeded.backing['sub-store']);
+        storeObj.settings.logsMaxCount = 200;
+        storeObj.files = [{ name: 'f1', source: 'local', content: 'hello' }];
+        seeded.backing['sub-store'] = JSON.stringify(storeObj);
+        seeded.backing['sub-store-logs'] = '[]';
+
+        const run = await runBundle(simpleCode, {
+            request: {
+                method: 'GET',
+                url: 'http://sub.store/api/wholeFiles',
+                headers: {},
+            },
+            store: seeded.store,
+        });
+        expect(run.doneCalls).to.have.length(1);
+        const res = run.doneCalls[0].response;
+        expect(res.status).to.equal(200);
+        expect(JSON.parse(res.body).data).to.deep.equal([
+            { name: 'f1', source: 'local', content: 'hello' },
+        ]);
+
+        // Even if multiple logs were emitted during startup/routing, at most 1 flush write occurs.
+        const logWrites = seeded.writes.filter(
+            (item) => item.key === 'sub-store-logs',
+        );
+        expect(logWrites.length).to.be.at.most(1);
+    });
 });

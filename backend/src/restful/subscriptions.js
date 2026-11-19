@@ -264,8 +264,8 @@ function getSubscription(req, res) {
     let { raw } = req.query;
     const allSubs = $.read(SUBS_KEY);
     const sub = findByName(allSubs, name);
-    delete sub.subscriptions;
     if (sub) {
+        delete sub.subscriptions;
         if (raw) {
             res.set('content-type', 'application/json')
                 .set('access-control-expose-headers', 'content-disposition')
@@ -287,8 +287,8 @@ function getSubscription(req, res) {
             new ResourceNotFoundError(
                 `SUBSCRIPTION_NOT_FOUND`,
                 `Subscription ${name} does not exist`,
-                404,
             ),
+            404,
         );
     }
 }

@@ -3,9 +3,14 @@ import { hex_md5 } from '@/vendor/md5';
 
 export const SHARD_BYTES = 3 * 1024 * 1024;
 const INLINE_BYTES = 64 * 1024;
+const UTF8_ENCODER = new TextEncoder();
+
+export function utf8Bytes(text) {
+    return UTF8_ENCODER.encode(text).length;
+}
 
 export function jsonBytes(value) {
-    return new TextEncoder().encode(JSON.stringify(value)).length;
+    return utf8Bytes(JSON.stringify(value));
 }
 
 // Small maps keep the legacy layout. Large maps migrate to one host-store
@@ -22,6 +27,21 @@ export class CacheShards {
         this.sharded = false;
         this.legacy = {};
         this._manifestLoaded = false;
+    }
+
+    ensureManifest() {
+        if (!this._manifestLoaded) {
+            this.loadManifest();
+        }
+    }
+
+    isSharded() {
+        this.ensureManifest();
+        return this.sharded && Object.keys(this.legacy).length === 0;
+    }
+
+    shardKeyFor(id) {
+        return `${this.key}:v1:${hex_md5(id)}`;
     }
 
     loadManifest() {
@@ -63,9 +83,7 @@ export class CacheShards {
      */
     readEntry(id) {
         if (!id) return undefined;
-        if (!this._manifestLoaded) {
-            this.loadManifest();
-        }
+        this.ensureManifest();
         if (!this.sharded) {
             return this.legacy[id];
         }
@@ -75,7 +93,7 @@ export class CacheShards {
         ) {
             return this.legacy[id];
         }
-        const shardKey = `${this.key}:v1:${hex_md5(id)}`;
+        const shardKey = this.shardKeyFor(id);
         if (!this._keySet.has(shardKey)) {
             return undefined;
         }
@@ -93,6 +111,89 @@ export class CacheShards {
             /* A corrupt shard must not break lookups. */
         }
         return undefined;
+    }
+
+    /**
+     * Write only dirty entries when the store is already sharded, avoiding
+     * reading or re-encoding unrelated shards. Returns null if a full
+     * load + save migration is needed.
+     */
+    writeEntries(entries) {
+        if (!this.isSharded()) return null;
+        const prepared = [];
+        const added = [];
+        const addedSet = new Set();
+        for (const [id, entry] of Object.entries(entries || {})) {
+            const text = JSON.stringify([id, entry]);
+            if (utf8Bytes(text) > SHARD_BYTES) continue;
+            const shardKey = this.shardKeyFor(id);
+            prepared.push({ shardKey, text });
+            if (!this._keySet.has(shardKey) && !addedSet.has(shardKey)) {
+                added.push(shardKey);
+                addedSet.add(shardKey);
+            }
+        }
+        if (!prepared.length) return true;
+        if (added.length > 0) {
+            const nextKeys = [...this.keys, ...added];
+            const manifestText = JSON.stringify({
+                cacheShardsVersion: 1,
+                keys: nextKeys,
+            });
+            if (utf8Bytes(manifestText) > SHARD_BYTES) return false;
+            if (this.write(manifestText, this.key) === false) return false;
+            this.keys = nextKeys;
+            this._keySet = new Set(nextKeys);
+        }
+        for (const { shardKey, text } of prepared) {
+            if (this.encoded.get(shardKey) !== text) {
+                if (this.write(text, shardKey) === false) return false;
+                this.encoded.set(shardKey, text);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Delete specific keys from an already-sharded store without loading
+     * unrelated shards. Returns null if a full load + save is needed.
+     */
+    deleteEntries(ids) {
+        if (!this.isSharded()) return null;
+        const toDelete = [];
+        const toDeleteSet = new Set();
+        for (const id of ids || []) {
+            if (!id) continue;
+            const shardKey = this.shardKeyFor(id);
+            if (this._keySet.has(shardKey) && !toDeleteSet.has(shardKey)) {
+                toDelete.push(shardKey);
+                toDeleteSet.add(shardKey);
+            }
+        }
+        if (!toDelete.length) return true;
+        for (const shardKey of toDelete) {
+            if (this.write(null, shardKey) === false) return false;
+            this.encoded.delete(shardKey);
+        }
+        const nextKeys = this.keys.filter((key) => !toDeleteSet.has(key));
+        if (!nextKeys.length) {
+            if (this.write('{}', this.key) === false) return false;
+            this.keys = [];
+            this._keySet = new Set();
+            this._manifestLoaded = true;
+            this.sharded = false;
+            this.legacy = {};
+            return true;
+        }
+        const manifestText = JSON.stringify({
+            cacheShardsVersion: 1,
+            keys: nextKeys,
+        });
+        if (utf8Bytes(manifestText) > SHARD_BYTES) return false;
+        if (this.write(manifestText, this.key) === false) return false;
+        this.keys = nextKeys;
+        this._keySet = new Set(nextKeys);
+        return true;
     }
 
     load() {
@@ -127,37 +228,55 @@ export class CacheShards {
 
     save(entries) {
         const previous = this.keys;
-        if (
-            !this.sharded &&
-            !previous.length &&
-            jsonBytes(entries) <= INLINE_BYTES
-        ) {
-            const ok = this.write(JSON.stringify(entries), this.key) !== false;
-            if (ok) {
-                this.legacy = { ...entries };
-                this._manifestLoaded = true;
+        if (!this.sharded && !previous.length) {
+            const inlineText = JSON.stringify(entries);
+            if (utf8Bytes(inlineText) <= INLINE_BYTES) {
+                const ok = this.write(inlineText, this.key) !== false;
+                if (ok) {
+                    this.legacy = { ...entries };
+                    this._manifestLoaded = true;
+                }
+                return ok;
             }
-            return ok;
         }
-        const pairs = Object.entries(entries).filter(
-            ([id, entry]) => jsonBytes([id, entry]) <= SHARD_BYTES,
-        );
-        const keys = pairs.map(([id]) => `${this.key}:v1:${hex_md5(id)}`);
+        const prepared = [];
+        const keys = [];
+        for (const [id, entry] of Object.entries(entries)) {
+            const text = JSON.stringify([id, entry]);
+            if (utf8Bytes(text) > SHARD_BYTES) continue;
+            const key = this.shardKeyFor(id);
+            prepared.push({ key, text });
+            keys.push(key);
+        }
+        const hasLegacy = Object.keys(this.legacy).length > 0;
+        const sameKeySet =
+            this.sharded &&
+            !hasLegacy &&
+            keys.length === previous.length &&
+            keys.every((key) => this._keySet.has(key));
+        if (sameKeySet && keys.length > 0) {
+            for (const { key, text } of prepared) {
+                if (this.encoded.get(key) !== text) {
+                    if (this.write(text, key) === false) return false;
+                    this.encoded.set(key, text);
+                }
+            }
+            this._manifestLoaded = true;
+            return true;
+        }
         const tracked = [...new Set([...previous, ...keys])];
         const staging = {
             cacheShardsVersion: 1,
             keys: tracked,
-            ...(Object.keys(this.legacy).length ? { legacy: this.legacy } : {}),
+            ...(hasLegacy ? { legacy: this.legacy } : {}),
         };
-        if (jsonBytes(staging) > SHARD_BYTES) return false;
-        if (this.write(JSON.stringify(staging), this.key) === false)
-            return false;
+        const stagingText = JSON.stringify(staging);
+        if (utf8Bytes(stagingText) > SHARD_BYTES) return false;
+        if (this.write(stagingText, this.key) === false) return false;
         this.keys = tracked;
         this._keySet = new Set(tracked);
         this.sharded = true;
-        for (const [id, entry] of pairs) {
-            const key = `${this.key}:v1:${hex_md5(id)}`;
-            const text = JSON.stringify([id, entry]);
+        for (const { key, text } of prepared) {
             if (this.encoded.get(key) !== text) {
                 if (this.write(text, key) === false) return false;
                 this.encoded.set(key, text);
@@ -179,10 +298,9 @@ export class CacheShards {
             this.legacy = {};
             return true;
         }
-        const manifest = { cacheShardsVersion: 1, keys };
-        if (jsonBytes(manifest) > SHARD_BYTES) return false;
-        if (this.write(JSON.stringify(manifest), this.key) === false)
-            return false;
+        const manifestText = JSON.stringify({ cacheShardsVersion: 1, keys });
+        if (utf8Bytes(manifestText) > SHARD_BYTES) return false;
+        if (this.write(manifestText, this.key) === false) return false;
         this.keys = keys;
         this._keySet = new Set(keys);
         this._manifestLoaded = true;

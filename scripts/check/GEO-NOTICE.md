@@ -4,8 +4,10 @@
 [xream/scripts geo.js](https://github.com/xream/scripts/blob/main/surge/modules/sub-store-scripts/check/geo.js).
 The repository's `LICENSE` is GNU GPL version 3; a verbatim copy is provided as
 [GEO-LICENSE.txt](./GEO-LICENSE.txt). The original file has no separate SPDX header.
-Upstream repository revision checked on 2026-11-13:
+Upstream repository revision checked on 2026-11-20:
 `49248e431b1ebb3f55b6d384a25582f74cde8207`.
+Upstream file blob SHA (`surge/modules/sub-store-scripts/check/geo.js`):
+`1d573206451a140b3ba3964b07f7de392e7e5ccd`.
 
 The upstream [README](https://github.com/xream/scripts/blob/49248e431b1ebb3f55b6d384a25582f74cde8207/README.md)
 contains additional disclaimers, use restrictions and a 24-hour deletion request.
@@ -13,11 +15,13 @@ Those statements coexist with the GPL license; this notice records both and does
 not claim that their legal interpretation has been resolved. Publication of this
 modified file was explicitly requested by the fork owner on 2026-11-13.
 
-Modified for ahuai6/Sub-Store-Fork on 2026-11-13: batched TTL-bound cache writes,
-short keys, compiled regular expressions/templates, concurrent request sharing,
-optional reachability checks, Surge concurrency and time-budget limits, and an
-opt-in `keep_last` result. Existing script arguments and output templates are
-preserved; new modes are opt-in.
+Modified for ahuai6/Sub-Store-Fork (2026-11-13, updated 2026-11-20): batched
+TTL-bound cache writes, short keys, compiled regular expressions/templates,
+concurrent request sharing, synchronous cache pre-pass before network probing,
+optional reachability checks, Surge concurrency and time-budget limits, opt-in
+`keep_last` + `prioritize_stale` scheduling, and a one-line summary log.
+Existing script arguments and output templates are preserved; new modes are
+opt-in.
 The source is distributed as readable JavaScript with this attribution and the
 upstream GPL license, separately from the backend's AGPL license.
 
@@ -43,4 +47,9 @@ and `7d` are also accepted. Unset, empty, or `0` keeps it until a newer success
 or until refresh. `/api/utils/refresh` and clear-cache delete it with the other
 caches.
 
-Example: `keep_last=true&keep_last_max_age=7d`.
+Optional `prioritize_stale=true` (used with `keep_last=true`) orders uncached
+network probes so nodes without a stored success and nodes with the oldest
+`savedAt` are probed first within `time_budget`, without altering the order of
+the returned proxy list.
+
+Example: `keep_last=true&keep_last_max_age=7d&prioritize_stale=true`.

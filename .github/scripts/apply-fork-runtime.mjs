@@ -136,8 +136,34 @@ need(
 );
 forbid('backend/src/utils/rs.js', 'jsrsasign');
 need('backend/src/utils/cache-shards.js', 'readEntry');
+need('backend/src/utils/cache-shards.js', 'writeEntries');
+need('backend/src/utils/cache-shards.js', 'deleteEntries');
 need('backend/src/utils/bounded-cache.js', '_ensureLoaded');
+need('backend/src/utils/resource-cache.js', 'new CacheShards');
+need('backend/src/utils/output-cache.js', 'digestLargeString');
+need('backend/src/utils/download.js', 'deferPreprocess');
+need('backend/src/utils/download.js', 'defaultFlowUserAgent');
+need('backend/src/restful/sync.js', 'parseRawProxyEntries');
+need('backend/src/restful/preview.js', 'parseRawProxyEntries');
 need('backend/src/utils/yaml.js', 'jsonYamlReplacer');
+need('backend/bundle-esbuild.js', 'stripPeggyGrammarPlugin');
+need('backend/bundle-esbuild.js', 'dedupeNoblePlugin');
+need('backend/src/products/sub-store-0.js', 'registerFileMetadataRoutes');
+need('backend/src/restful/file-metadata.js', '/api/wholeFiles');
+need('backend/src/vendor/express.js', 'flushLogEntries');
+need('backend/src/vendor/express.js', 'INVALID_JSON');
+forbid('backend/src/vendor/express.js', '"HEAD\'"');
+need('backend/src/utils/debug-logs.js', 'flushLogEntries');
+need('.github/scripts/fork-frontend/forkRequestGuard.ts', 'resolveApiPriority');
+need('.github/scripts/fork-frontend/forkRequestGuard.ts', 'queuedPreviewGet');
+need('.github/scripts/prepare_frontend_pages.py', 'PREVIEW_ROUTE_ANCHOR');
+need('.github/scripts/prepare_frontend_pages.py', 'registerType: "autoUpdate"');
+need('.github/scripts/prepare_frontend_pages.py', 'FILE_PREVIEW_GET_ANCHOR');
+need('.github/scripts/prepare_frontend_pages.py', 'content-visibility:auto');
+need('scripts/check/geo.js', 'prioritize_stale');
+need('scripts/check/GEO-NOTICE.md', 'Upstream file blob SHA');
+need('.github/scripts/check_geo_upstream.py', 'extract_recorded_blob_sha');
+need('.github/workflows/sync-upstream.yml', 'check_geo_upstream.py');
 
 if (failures.length > 0) {
     for (const message of failures) console.error(`::error::${message}`);

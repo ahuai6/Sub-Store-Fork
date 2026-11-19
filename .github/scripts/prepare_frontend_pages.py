@@ -22,6 +22,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 BASE = "/Sub-Store-Fork/"
 API = "https://sub.store"
@@ -30,7 +31,7 @@ UPSTREAM_REPO = "sub-store-org/Sub-Store-Front-End"
 # Bump when a source patch changes behavior. publish-frontend compares this
 # with gh-pages frontend-version.txt and rebuilds even if the upstream sha,
 # base, and API URL are unchanged.
-PATCH_STAMP = "subpath-routes-1-surge-session-2-repo-pages-1"
+PATCH_STAMP = "subpath-routes-2-pwa-autoupdate-1-surge-session-3-repo-pages-1"
 
 # subs.ts decides whether to load traffic/expiry by comparing the browser
 # pathname to the router path. Under a project-site base that pathname is
@@ -78,6 +79,15 @@ COPY_API_LINK_REPLACEMENT = (
 )
 COPY_API_LINK_MARKER = "new URL(import.meta.env.BASE_URL, window.location.origin)"
 
+# PreviewPanel opens the raw text preview page via window.open(getUrl(path, true)).
+# A root-absolute `/preview` URL escapes `/Sub-Store-Fork/` and hits GitHub Pages 404.
+PREVIEW_ROUTE_ANCHOR = "    return buildUrlWithQuery('/preview', previewQuery);"
+PREVIEW_ROUTE_REPLACEMENT = (
+    "    const base = import.meta.env.BASE_URL.replace(/\\/$/, '');\n"
+    "    return buildUrlWithQuery(`${base}/preview`, previewQuery);"
+)
+PREVIEW_ROUTE_MARKER = "buildUrlWithQuery(`${base}/preview`, previewQuery)"
+
 # Terser turns `pathname === '/subs'` into `"/subs"===window.location.pathname`.
 # Either order is the unpatched guard. A base-stripped comparison does not
 # put location.pathname on either side of that literal.
@@ -89,6 +99,7 @@ ROOT_PATHNAME_EQ = re.compile(
 )
 ROOT_ABOUT_HREF = re.compile(r"""href\s*[:=]\s*(['"`])/aboutUs\1""")
 ORIGIN_ONLY_URL = re.compile(r"""new URL\(\s*(?:window\.)?location\.origin\s*\)""")
+ROOT_PREVIEW_CALL = re.compile(r"""[A-Za-z_$][\w$]*\(\s*(['"`])/preview\1\s*,""")
 
 
 def normalize_base(base: str) -> str:
@@ -106,6 +117,27 @@ FORK_GUARD = "forkRequestGuard.ts"
 FORK_META = (
     '<meta name="sub-store-fork" '
     'content="api-cap-2 skip-restored-preview" />'
+)
+COMPARE_TABLE_CV_STYLE = (
+    "<style>.compare-table-body .compare-table-row"
+    "{content-visibility:auto;contain-intrinsic-size:auto 56px;}</style>"
+)
+FILE_PREVIEW_IMPORT_ANCHOR = "import axios from 'axios';"
+FILE_PREVIEW_IMPORT_REPLACEMENT = (
+    "import axios from 'axios';\n"
+    "import { queuedPreviewGet } from '@/utils/forkRequestGuard';"
+)
+FILE_PREVIEW_GET_ANCHOR = (
+    "      const response = await axios.get(url as string, {\n"
+    "        responseType: 'text',\n"
+    "        transformResponse: [(data) => data],\n"
+    "      })"
+)
+FILE_PREVIEW_GET_REPLACEMENT = (
+    "      const response = await queuedPreviewGet(axios, url as string, {\n"
+    "        responseType: 'text',\n"
+    "        transformResponse: [(data) => data],\n"
+    "      })"
 )
 CONCURRENCY_FN = """export const getFrontendRequestConcurrency = () => {
   const storedConcurrency = localStorage.getItem('concurrency')?.trim();
@@ -142,6 +174,14 @@ PREVIEW_RETURN_NEXT = """      if (blockRestoredHeavyPreview()) {
       });"""
 
 
+def _read_utf8(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _write_utf8(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+
+
 def _require(text: str, old: str, label: str) -> None:
     if old not in text:
         raise SystemExit(f"{label} is missing anchor:\n{old}")
@@ -154,8 +194,15 @@ def _replace_text_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-def patch_surge_session_guard(frontend: Path) -> None:
-    """Cap API concurrency and skip heavy previews after refresh/restore.
+def _api_origin(api: str) -> str:
+    parsed = urlsplit(api)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return api.rstrip("/")
+
+
+def patch_surge_session_guard(frontend: Path, api: str = API) -> None:
+    """Cap API concurrency, guard FilePreview fetches, and skip restored previews.
 
     Anchors are the upstream strings. A vanished anchor fails the build
     instead of shipping a frontend that can fill all 3 Surge script slots.
@@ -167,19 +214,19 @@ def patch_surge_session_guard(frontend: Path) -> None:
         raise SystemExit(f"missing frontend guard template {template}")
     target = frontend / "src" / "utils" / FORK_GUARD
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(template.read_text())
+    _write_utf8(target, _read_utf8(template))
 
     api_path = frontend / "src" / "api" / "index.ts"
-    api = api_path.read_text()
-    api = _replace_text_once(
-        api,
+    api_src = _read_utf8(api_path)
+    api_src = _replace_text_once(
+        api_src,
         "import { getApiRequestTimeout } from '@/utils/requestTimeout';",
         "import { getApiRequestTimeout } from '@/utils/requestTimeout';\n"
         "import { installForkApiQueue } from '@/utils/forkRequestGuard';",
         str(api_path),
     )
-    api = _replace_text_once(
-        api,
+    api_src = _replace_text_once(
+        api_src,
         "const service = axios.create({\n"
         "  baseURL: getHostAPIUrl(),\n"
         "  timeout: getApiRequestTimeout(),\n"
@@ -193,10 +240,10 @@ def patch_surge_session_guard(frontend: Path) -> None:
         "installForkApiQueue(service);",
         str(api_path),
     )
-    api_path.write_text(api)
+    _write_utf8(api_path, api_src)
 
     subs_path = frontend / "src" / "api" / "subs" / "index.ts"
-    subs = subs_path.read_text()
+    subs = _read_utf8(subs_path)
     subs = _replace_text_once(
         subs,
         "import request from '@/api';\nimport { AxiosPromise } from 'axios';",
@@ -207,32 +254,55 @@ def patch_surge_session_guard(frontend: Path) -> None:
         str(subs_path),
     )
     subs = _replace_text_once(subs, PREVIEW_RETURN, PREVIEW_RETURN_NEXT, str(subs_path))
-    subs_path.write_text(subs)
+    _write_utf8(subs_path, subs)
+
+    file_preview_path = frontend / "src" / "views" / "FilePreview.vue"
+    file_preview = _read_utf8(file_preview_path)
+    file_preview = _replace_text_once(
+        file_preview,
+        FILE_PREVIEW_IMPORT_ANCHOR,
+        FILE_PREVIEW_IMPORT_REPLACEMENT,
+        str(file_preview_path),
+    )
+    file_preview = _replace_text_once(
+        file_preview,
+        FILE_PREVIEW_GET_ANCHOR,
+        FILE_PREVIEW_GET_REPLACEMENT,
+        str(file_preview_path),
+    )
+    _write_utf8(file_preview_path, file_preview)
 
     queue_path = frontend / "src" / "utils" / "requestConcurrency.ts"
-    queue = queue_path.read_text()
+    queue = _read_utf8(queue_path)
     queue = _replace_text_once(
         queue, CONCURRENCY_FN, CONCURRENCY_FN_NEXT, str(queue_path)
     )
-    queue_path.write_text(queue)
+    _write_utf8(queue_path, queue)
 
     index_path = frontend / "index.html"
-    html = index_path.read_text()
+    html = _read_utf8(index_path)
     version_meta = (
         '<meta name="version" content="__SUB_STORE_FRONT_END_VERSION__">'
     )
+    preconnect_link = f'<link rel="preconnect" href="{_api_origin(api)}" crossorigin />'
     html = _replace_text_once(
         html,
         version_meta,
-        version_meta + "\n  " + FORK_META,
+        version_meta
+        + "\n  "
+        + FORK_META
+        + "\n  "
+        + preconnect_link
+        + "\n  "
+        + COMPARE_TABLE_CV_STYLE,
         str(index_path),
     )
-    index_path.write_text(html)
+    _write_utf8(index_path, html)
     print(f"patched Surge session guard in {frontend}", file=sys.stderr)
 
 
 def _replace_once(path: Path, anchor: str, replacement: str, marker: str) -> None:
-    text = path.read_text()
+    text = _read_utf8(path)
     has_anchor = anchor in text
     has_marker = marker in text
     if has_marker and not has_anchor:
@@ -244,7 +314,7 @@ def _replace_once(path: Path, anchor: str, replacement: str, marker: str) -> Non
     count = text.count(anchor)
     if count != 1 or has_marker:
         raise SystemExit(f"{path} has {count} copies of the patch anchor; expected exactly one")
-    path.write_text(text.replace(anchor, replacement, 1))
+    _write_utf8(path, text.replace(anchor, replacement, 1))
 
 
 def patch_subpath_routes(frontend: Path) -> None:
@@ -262,12 +332,12 @@ def patch_subpath_routes(frontend: Path) -> None:
     if not vue_files:
         raise SystemExit(f"{frontend / 'src'} has no Vue files to patch")
     for path in vue_files:
-        text = path.read_text()
+        text = _read_utf8(path)
         old_count = text.count(ABOUT_LINK_ANCHOR)
         about_old += old_count
         about_new += text.count(ABOUT_LINK_REPLACEMENT)
         if old_count:
-            path.write_text(text.replace(ABOUT_LINK_ANCHOR, ABOUT_LINK_REPLACEMENT))
+            _write_utf8(path, text.replace(ABOUT_LINK_ANCHOR, ABOUT_LINK_REPLACEMENT))
     if about_old == 0 and about_new == 0:
         raise SystemExit(
             "src/**/*.vue is missing the href=\"/aboutUs\" anchor, "
@@ -277,14 +347,14 @@ def patch_subpath_routes(frontend: Path) -> None:
     copy_old = 0
     copy_new = 0
     for path in (frontend / "src").rglob("*.vue"):
-        text = path.read_text()
+        text = _read_utf8(path)
         old_count = text.count(COPY_API_LINK_ANCHOR)
         copy_old += old_count
         copy_new += text.count(COPY_API_LINK_MARKER)
         if old_count:
             if old_count != 1:
                 raise SystemExit(f"{path} has {old_count} API copy-link anchors; expected one")
-            path.write_text(text.replace(COPY_API_LINK_ANCHOR, COPY_API_LINK_REPLACEMENT, 1))
+            _write_utf8(path, text.replace(COPY_API_LINK_ANCHOR, COPY_API_LINK_REPLACEMENT, 1))
     if copy_old == 0 and copy_new == 0:
         raise SystemExit(
             "src is missing the `new URL(window.location.origin)` API copy-link anchor, "
@@ -292,6 +362,13 @@ def patch_subpath_routes(frontend: Path) -> None:
         )
     if copy_old > 1:
         raise SystemExit(f"expected one API copy-link anchor, found {copy_old}")
+
+    _replace_once(
+        frontend / "src/components/PreviewPanel.vue",
+        PREVIEW_ROUTE_ANCHOR,
+        PREVIEW_ROUTE_REPLACEMENT,
+        PREVIEW_ROUTE_MARKER,
+    )
 
 
 def assert_source_paths(frontend: Path, base: str) -> None:
@@ -309,7 +386,7 @@ def assert_source_paths(frontend: Path, base: str) -> None:
     for path in source_files:
         if not path.is_file() or path.suffix not in {".vue", ".ts", ".js", ".html"}:
             continue
-        text = path.read_text(errors="ignore")
+        text = path.read_text(encoding="utf-8", errors="ignore")
         relative = path.relative_to(frontend)
         for lineno, line in enumerate(text.splitlines(), 1):
             for match in href_re.finditer(line):
@@ -327,10 +404,15 @@ def assert_source_paths(frontend: Path, base: str) -> None:
             problems.append(f"{relative}: location.pathname compared to a root path ({match.group(0)})")
         for match in origin_url_re.finditer(text):
             problems.append(f"{relative}: {match.group(0)} drops the Pages base")
+        for match in ROOT_PREVIEW_CALL.finditer(text):
+            problems.append(f"{relative}: {match.group(0)} bypasses the Pages base")
 
-    subs = (frontend / "src/store/subs.ts").read_text()
+    subs = _read_utf8(frontend / "src/store/subs.ts")
     if FLOW_PAGE_MARKER not in subs or "import.meta.env.BASE_URL" not in subs:
         problems.append("src/store/subs.ts flow check does not strip BASE_URL")
+    preview_panel = _read_utf8(frontend / "src/components/PreviewPanel.vue")
+    if PREVIEW_ROUTE_MARKER not in preview_panel:
+        problems.append("src/components/PreviewPanel.vue does not prefix /preview with BASE_URL")
     if problems:
         raise SystemExit(
             "frontend source still assumes it is served from /:\n" + "\n".join(problems)
@@ -340,7 +422,7 @@ def assert_source_paths(frontend: Path, base: str) -> None:
 def patch_checkout(frontend: Path, base: str, api: str) -> None:
     base = normalize_base(base)
     env_path = frontend / ".env"
-    env_text = env_path.read_text()
+    env_text = _read_utf8(env_path)
     env_next, env_count = re.subn(
         r"^VITE_PUBLIC_PATH\s*=\s*'[^']*'",
         f"VITE_PUBLIC_PATH = '{base}'",
@@ -350,10 +432,10 @@ def patch_checkout(frontend: Path, base: str, api: str) -> None:
     )
     if env_count != 1:
         raise SystemExit(f"{env_path} has no VITE_PUBLIC_PATH assignment")
-    env_path.write_text(env_next)
+    _write_utf8(env_path, env_next)
 
     prod_path = frontend / ".env.production"
-    prod_text = prod_path.read_text()
+    prod_text = _read_utf8(prod_path)
     prod_next, prod_count = re.subn(
         r"^VITE_API_URL\s*=\s*'[^']*'",
         f"VITE_API_URL = '{api}'",
@@ -363,11 +445,14 @@ def patch_checkout(frontend: Path, base: str, api: str) -> None:
     )
     if prod_count != 1:
         raise SystemExit(f"{prod_path} has no VITE_API_URL assignment")
-    prod_path.write_text(prod_next)
+    _write_utf8(prod_path, prod_next)
 
     vite_path = frontend / "vite.config.ts"
-    vite = vite_path.read_text()
+    vite = _read_utf8(vite_path)
     replacements = {
+        # Upstream uses "prompt" without wiring a SKIP_WAITING UI handler,
+        # leaving iOS PWAs pinned on old service-worker caches.
+        'registerType: "prompt",': 'registerType: "autoUpdate",',
         'id: "/",': f'id: "{base}",',
         'start_url: "/",': f'start_url: "{base}",',
         'scope: "/",': f'scope: "{base}",',
@@ -381,22 +466,22 @@ def patch_checkout(frontend: Path, base: str, api: str) -> None:
         if old not in vite:
             raise SystemExit(f"{vite_path} is missing {old}")
         vite = vite.replace(old, new, 1)
-    vite_path.write_text(vite)
+    _write_utf8(vite_path, vite)
 
     # vue-router 4.0.16 createWebHistory() reads a <base> tag, not
     # import.meta.env.BASE_URL. Vite does not inject that tag.
     router_path = frontend / "src/router/index.ts"
-    router = router_path.read_text()
+    router = _read_utf8(router_path)
     routed = "const history = createWebHistory(import.meta.env.BASE_URL);"
     plain = "const history = createWebHistory();"
     if routed not in router:
         if plain not in router:
             raise SystemExit(f"{router_path} has no createWebHistory() anchor")
         router = router.replace(plain, routed, 1)
-        router_path.write_text(router)
+        _write_utf8(router_path, router)
 
     index_path = frontend / "index.html"
-    html = index_path.read_text()
+    html = _read_utf8(index_path)
     # Leave src="/src/..." so Vite still compiles the entry. Root-absolute
     # hrefs are copied through unchanged when base is not `/`.
     base_body = re.escape(base.lstrip("/"))
@@ -412,16 +497,16 @@ def patch_checkout(frontend: Path, base: str, api: str) -> None:
         html = html_next
     elif 'href="/' not in html:
         raise SystemExit(f"{index_path} has no root-absolute hrefs")
-    index_path.write_text(html)
+    _write_utf8(index_path, html)
 
     manifest_path = frontend / "public" / "manifests.json"
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(_read_utf8(manifest_path))
     for key in ("id", "start_url", "scope"):
         if key not in manifest:
             raise SystemExit(f"{manifest_path} has no {key}")
         manifest[key] = base
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    patch_surge_session_guard(frontend)
+    _write_utf8(manifest_path, json.dumps(manifest, indent=2) + "\n")
+    patch_surge_session_guard(frontend, api)
     patch_subpath_routes(frontend)
     assert_source_paths(frontend, base)
     print(f"patched {frontend} base={base} api={api} patches={PATCH_STAMP}", file=sys.stderr)
@@ -429,7 +514,7 @@ def patch_checkout(frontend: Path, base: str, api: str) -> None:
 
 def _load_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text())
+        return json.loads(_read_utf8(path))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"{path} is not JSON: {exc}") from exc
 
@@ -448,7 +533,7 @@ def check_dist(dist: Path, base: str, api: str) -> None:
     index_path = dist / "index.html"
     if not index_path.is_file():
         raise SystemExit(f"missing {index_path}")
-    index = index_path.read_text()
+    index = _read_utf8(index_path)
     attrs = re.findall(r'(?:src|href)="(/[^"]*)"', index)
     if not attrs:
         raise SystemExit("index.html has no root-absolute assets")
@@ -469,7 +554,7 @@ def check_dist(dist: Path, base: str, api: str) -> None:
         _assert_icons(manifest, base, name)
 
     register_path = dist / "registerSW.js"
-    register = register_path.read_text()
+    register = _read_utf8(register_path)
     if f"scope: '{base}'" not in register and f'scope: "{base}"' not in register:
         raise SystemExit(f"registerSW.js scope is not {base}:\n{register}")
     if re.search(r"""register\(\s*['"]/sw\.js['"]""", register):
@@ -478,24 +563,32 @@ def check_dist(dist: Path, base: str, api: str) -> None:
         raise SystemExit(f"registerSW.js does not register {base}sw.js:\n{register}")
 
     sw_path = dist / "sw.js"
-    sw = sw_path.read_text()
+    sw = _read_utf8(sw_path)
     if re.search(r"""['"]/index\.html['"]""", sw):
         raise SystemExit("sw.js still navigates to /index.html")
     if "index.html" not in sw:
         raise SystemExit("sw.js has no index.html precache/fallback")
+    if "skipWaiting" not in sw or "clientsClaim" not in sw:
+        raise SystemExit(
+            "sw.js is missing skipWaiting/clientsClaim (autoUpdate did not take effect)"
+        )
 
     scripts = [
         path
         for path in dist.rglob("*.js")
         if not path.name.endswith(".js.gz") and path.suffix == ".js"
     ]
-    bundled = "\n".join(path.read_text(errors="ignore") for path in scripts)
+    bundled = "\n".join(path.read_text(encoding="utf-8", errors="ignore") for path in scripts)
     if base not in bundled:
         raise SystemExit(f"built JS does not contain the base path {base}")
     if api not in bundled:
         raise SystemExit(f"built JS does not contain {api}")
     if 'name="sub-store-fork"' not in index:
         raise SystemExit("index.html is missing the sub-store-fork marker")
+    if 'rel="preconnect"' not in index or _api_origin(api) not in index:
+        raise SystemExit("index.html is missing the API preconnect link")
+    if "content-visibility:auto" not in index:
+        raise SystemExit("index.html is missing the compare-table content-visibility style")
     for marker in (
         "sub-store-fork-api-cap:2",
         "sub-store-fork-skip-restored-preview",
@@ -505,7 +598,7 @@ def check_dist(dist: Path, base: str, api: str) -> None:
     assert_built_paths(dist)
     version_path = dist / "frontend-version.txt"
     if version_path.is_file():
-        version_text = version_path.read_text().splitlines()
+        version_text = _read_utf8(version_path).splitlines()
         if f"patches={PATCH_STAMP}" not in version_text:
             raise SystemExit(
                 f"{version_path} is missing patches={PATCH_STAMP}, "
@@ -534,11 +627,12 @@ def assert_built_paths(dist: Path) -> None:
     if not files:
         raise SystemExit(f"{dist} has no JS or HTML to scan for root paths")
     for path in files:
-        text = path.read_text(errors="ignore")
+        text = path.read_text(encoding="utf-8", errors="ignore")
         for regex, label in (
             (ROOT_PATHNAME_EQ, "pathname compared with a root route"),
             (ROOT_ABOUT_HREF, 'href="/aboutUs"'),
             (ORIGIN_ONLY_URL, "new URL(location.origin) drops the Pages base"),
+            (ROOT_PREVIEW_CALL, "root-absolute /preview call drops the Pages base"),
         ):
             match = regex.search(text)
             if not match:
@@ -564,7 +658,7 @@ def write_version(path: Path, meta: dict[str, str]) -> None:
         "api",
         "patches",
     )]
-    path.write_text("\n".join(lines) + "\n")
+    _write_utf8(path, "\n".join(lines) + "\n")
 
 
 def write_notices(dist: Path, meta: dict[str, str]) -> None:
@@ -606,8 +700,11 @@ The corresponding source of the upstream project is the commit above. This build
 9. `canFetchFlowsForCurrentPage` strips `import.meta.env.BASE_URL` from `window.location.pathname` before comparing it with `/subs`, so subscription traffic and expiry still load under the Pages subpath
 10. The load-failed `href="/aboutUs"` links are `router-link` targets, so Vue Router resolves them inside the history base
 11. The copied API link is `new URL(import.meta.env.BASE_URL, window.location.origin)`, so it opens this Pages site instead of the domain root
-12. Axios requests are queued to 2 (`sub-store-fork-api-cap:2`) so a Surge webview page leaves one of the 3 script sessions free
-13. `POST /api/preview/*` is skipped after a reload, back/forward restore, or bfcache `pageshow` until the next pointer, touch, or key action (`sub-store-fork-skip-restored-preview`)
+12. `PreviewPanel.vue` prefixes `/preview` with `import.meta.env.BASE_URL` so raw text preview opens under the Pages subpath instead of hitting a root 404
+13. VitePWA uses `registerType: "autoUpdate"` (`skipWaiting` + `clientsClaim`) so iOS PWAs pick up new deployments automatically instead of staying pinned to an old waiting worker
+14. Axios requests (and `FilePreview.vue` raw downloads via `queuedPreviewGet`) share a 3-tier priority queue capped at 2 (`sub-store-fork-api-cap:2`), prioritizing interactive requests over `/api/sub/flow` and deferring queued flow queries while the page is hidden
+15. `POST /api/preview/*` is skipped after a reload, back/forward restore, or bfcache `pageshow` until the next pointer, touch, or key action (`sub-store-fork-skip-restored-preview`)
+16. `index.html` adds a `<link rel="preconnect">` to the API origin and CSS `content-visibility:auto` on `.compare-table-body .compare-table-row` for smoother large-table rendering
 
 Source commit: {source}
 """
@@ -620,8 +717,8 @@ GitHub Pages site for the [Sub-Store front end](https://github.com/{UPSTREAM_REP
 This branch is GPL-3.0. See [LICENSE](./LICENSE) and [ATTRIBUTION.md](./ATTRIBUTION.md).
 Corresponding source: {source}
 """
-    (dist / "ATTRIBUTION.md").write_text(attribution)
-    (dist / "README.md").write_text(readme)
+    _write_utf8(dist / "ATTRIBUTION.md", attribution)
+    _write_utf8(dist / "README.md", readme)
     write_version(dist / "frontend-version.txt", meta)
 
 
@@ -632,7 +729,7 @@ def finalize_site(dist: Path, frontend: Path, meta: dict[str, str]) -> None:
     shutil.copyfile(license_src, dist / "LICENSE")
     index = dist / "index.html"
     shutil.copyfile(index, dist / "404.html")
-    (dist / ".nojekyll").write_text("")
+    _write_utf8(dist / ".nojekyll", "")
     write_notices(dist, meta)
     if (dist / "404.html").read_bytes() != index.read_bytes():
         raise SystemExit("404.html is not a copy of index.html")

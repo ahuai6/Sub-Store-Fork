@@ -10,8 +10,9 @@
 
 | 位置 | 职责 |
 | --- | --- |
-| `sub-store-org/Sub-Store` 的 `master` | 后端上游 |
-| `sub-store-org/Sub-Store-Front-End` | 前端上游，独立仓库，GPL-3.0。本仓库不 vendoring 前端 |
+| `sub-store-org/Sub-Store` 的 `master` | 后端上游（`sync-upstream.yml` 每日自动同步） |
+| `sub-store-org/Sub-Store-Front-End` | 前端上游，独立仓库，GPL-3.0。本仓库不 vendoring 前端（`publish-frontend.yml` 每日构建并套用锚点补丁） |
+| `xream/scripts` 的 `surge/modules/sub-store-scripts/check/geo.js` | `geo.js` 上游，GPL-3.0。以 `scripts/check/GEO-NOTICE.md` 记录 blob SHA，由 `sync-upstream.yml` 的 `check_geo_upstream.py` 每日非阻塞监测漂移 |
 | `upstream` | 上游 `master` 的原样镜像，只允许快进，不放 fork 改动 |
 | `main` | 上游代码 + 已审核的 fork 修改。默认分支是 `main`，不是 `master` |
 | `sync/upstream` | 冲突时的同步 PR 分支。已有解决提交时不强推 |
@@ -42,20 +43,21 @@
 
 - `backend/`：pnpm 包，`package.json` 的 `version` 是发布版本。`packageManager` 为 `pnpm@11.0.9`。Node 钉在根目录 `.node-version`（当前 `24.22.1`）。
 - `backend/src/main.js`：Node 入口，经 `backend/src/restful/index.js` 注册全部路由。
-- `backend/src/products/sub-store-0.js`：Surge 简单脚本。集合、订阅、token、模块、artifact、设置、排序、归档、misc、日志、age。不导入 ProxyUtils，不注册 file 路由。
-- `backend/src/products/sub-store-1.js`：Surge 核心脚本。download、file、preview、sync、node-info。file 路由在这里，所以简单包不会带上解析器。
+- `backend/src/products/sub-store-0.js`：Surge 简单脚本。集合、订阅、token、模块、纯文件元数据（`backend/src/restful/file-metadata.js`：`/api/files`、`/api/wholeFiles`、`/api/wholeFile/:name`，注册时不写存储）、artifact、设置、排序、归档、misc、日志、age。不导入 ProxyUtils，不导入 `restful/file.js` 或 `restful/sync.js`。
+- `backend/src/products/sub-store-1.js`：Surge 核心脚本。download、完整 file（含 `/api/file/:name`、`/share/file/:name` 及旧模块兼容）、preview、sync、node-info。解析器与生产者留在这个包里。
 - `backend/src/products/cron-sync-artifacts.js`：定时同步、定时处理、prefetch。
 - `backend/src/products/resource-parser.loon.js`、`proxy-utils.esm.js`：仍构建，给非本次 Surge 主路径的产物用。源码保留。
-- `backend/bundle-esbuild.js`、`backend/surge-only-strip.js`：构建。
+- `backend/bundle-esbuild.js`、`backend/surge-only-strip.js`：构建与瘦身插件（Surge-only 剥离、Peggy 语法模板剥离、`@noble/*` 去重）。
 - `backend/scripts/precompile-peggy.js`、`backend/scripts/bench.js`：Peggy 预编译和性能基准。基线在 `backend/bench/baseline.json`。
 - `config/Surge-Beta.sgmodule`：上游原文件。不要在这里写 fork 改动。
 - `.github/scripts/render_surge_beta_module.py`：把上游模块渲染成公开模块，并检查差异可以逐项还原。
-- `scripts/check/geo.js`：发布的脚本操作源码，旁边有 `GEO-NOTICE.md` 和 `GEO-LICENSE.txt`。
+- `scripts/check/geo.js`：发布的脚本操作源码，旁边有 `GEO-NOTICE.md`（记录上游修订与 blob SHA）和 `GEO-LICENSE.txt`。
+- `.github/scripts/check_geo_upstream.py`：检测 `xream/scripts` `geo.js` 漂移的非阻塞脚本。
 - `.github/workflows/`：CI、发布、前端和上游同步都在本仓库运行。`main.yml` 和 `star-history.yml` 仍是上游文件。
 
-发布的 Surge 模块把 Core（`sub-store-1.min.js`）放在 Simple（`sub-store-0.min.js`）前面。Core 的 pattern 匹配 download、`share/file`、`api/file(s)`、`api/wholeFile(s)`、preview、sync、`api/utils/node-info`。Simple 是 `^https?:\/\/sub\.store` 的兜底，看不到已经被 Core 接走的 file URL。
+发布的 Surge 模块把 Core（`sub-store-1.min.js`）放在 Simple（`sub-store-0.min.js`）前面。Core 的 pattern 匹配 download、`share/file`、`api/file/`、preview、sync、`api/utils/node-info`。Simple 是 `^https?:\/\/sub\.store` 的兜底，直接承接首页全部元数据列表请求（含 `/api/files`、`/api/wholeFiles`、`/api/wholeFile/:name`），避免冷启动 1 MB 的 Core 脚本；同时 `sub-store-1.min.js` 仍保留完整 `file.js` 路由，兼容尚未更新模块的旧安装。
 
-### Surge-only 构建
+### Surge-only 构建与打包瘦身
 
 只有 `sub-store-0` 和 `sub-store-1` 使用 esbuild `define`：
 
@@ -68,18 +70,32 @@ $platform = "Surge"
 
 `surge-only-strip.js` 在解析前删掉 `/* @non-surge-start */` … `/* @non-surge-end */` 整段语句。标记必须成对、包住完整语句、不能嵌套。其他构建保留这些语句。
 
-`bundle-esbuild.js` 的 `assertSurgeOnlyBundles()` 检查文本标记，没有数字体积门槛：
+全部浏览器构建（含 Surge、Loon、cron、Node 入口和 ESM 产物）在 `bundle-esbuild.js` 中额外运行两个零源码侵入的构建插件：
 
-- `sub-store-0.min.js` 不得含 `ProxyUtils`，也不得含 `undici`、`shoutrrr`、`dotenv`、`geoip2`、`fetch-socks`、`express`、`body-parser`、`$task.fetch`、`$prefs`、`stash-version`。必须仍有 `policy-descriptor`、`lodash`、`$httpClient`、`$persistentStore`。
-- `sub-store-1.min.js` 同样不得含上述宿主适配器，并且必须有 `sing-box` 和 `vmess`。生产者和解析器留在这个包里。
+- `stripPeggyGrammarPlugin`：打包阶段把 `parsers/peggy/(surge|loon|qx).js` 的 `export const grammars = String.raw\`...\`;` 替换为 `''`（源文件原样保留供 `precompile-peggy.js` 和单测使用），省去约 58 KB 运行时无用 DSL 文本。
+- `dedupeNoblePlugin`：将 `@noble/curves` 与 `@noble/hashes` 统一解析到 `age-encryption` 所用的 2.2.0 副本，避免与 `@noble/post-quantum` 的 ~2.0.0 重复入包，不改动上游 `package.json` 或 `pnpm-lock.yaml`。
+
+`bundle-esbuild.js` 的 `assertSurgeOnlyBundles()` 与 `assertNobleDeduplicated()` 检查标记与去重结果，没有数字体积门槛：
+
+- 所有浏览器产物 metafile 中 `@noble/curves` 与 `@noble/hashes` 各自不得超过 1 个版本。
+- `sub-store-0.min.js` 不得含 `ProxyUtils`，也不得含 `undici`、`shoutrrr`、`dotenv`、`geoip2`、`fetch-socks`、`express`、`body-parser`、`$task.fetch`、`$prefs`、`stash-version`、`KJUR`、`// global initializer`、`// per-parser initializer`。必须仍有 `policy-descriptor`、`lodash`、`$httpClient`、`$persistentStore`。
+- `sub-store-1.min.js` 同样不得含上述宿主适配器与 Peggy 原始语法注释，并且必须有 `sing-box` 和 `vmess`。生产者和解析器留在这个包里。
 - Node 的 `sub-store.min.js` 必须仍有 `undici` 和 dotenv。`sub-store.bundle.js` 必须仍有 undici 和 shoutrrr 相关文本。
 
 全部 producers、parsers（含 Loon、QX）和 lodash 都保留。不要为了缩小 Surge 包去删这些源文件。
 
-### 热路径
+### 热路径、下载与 Surge 路由/日志
 
 - `backend/src/utils/geo.js`：`getFlag` 的关键词匹配器在模块作用域编译一次。国旗和 ISO 表不再每个节点重建。
 - Peggy：`surge.js`、`loon.js`、`qx.js` 里的 grammar 仍是源码。`precompile-peggy.js` 在 `pretest`、`prebench`、`prebundle:esbuild`、`prestart` 时生成 `parsers/peggy/generated/`。该目录在 `.gitignore`。运行时 `getParser()` 加载生成结果，不调用 `peggy.generate`。语法变了要让预编译重新跑，不要手改生成文件。
+- 下载与输出缓存流水线（`download.js`、`sync.js`、`preview.js`、`output-cache.js`）：
+  - 非 `raw` 模式下，资源缓存命中走 `deferPreprocess: true`，跳过 `clashPreprocessor` 与 `ProxyUtils.parse`；命中 `outputCache` 时全程零解析。
+  - 网络冷拉完成节点有效性校验后，经 `returnParsed: true` 将已解析节点直接传回 `sync.js`/`preview.js` 复用，避免同一次拉取解析两次。
+  - `output-cache.js` 的 `OMITTED_SETTINGS` 排除 UI 主题、同步时间、日志上限、Gist/GitHub 同步设置等不影响输出的键；超 256 字符的原始文本先 MD5 摘要再参与键构造。
+  - 下载响应头含 `subscription-userinfo` 时，若未设置自定义 headers/flow 覆盖，会同步回填 `defaultFlowUserAgent + originalUrl` 的流量头缓存键（仍受 `headersCacheTtl` 管辖，TTL 为 0 时不写），避免自定义 UA 或启用 `githubProxy` 后 `/api/sub/flow` 重复请求。
+- 非 Node 路由与调试日志（`vendor/express.js`、`utils/debug-logs.js`）：
+  - `express.js` 修复 `HEAD` 方法名与 `next()` 续派发；JSON 请求体在 CORS 检查后解析，空体转 `{}`、非法 JSON 返回 400（附带 CORS 头）；同时捕获同步抛出与非 `async` 函数返回的 Promise 拒绝；`Response.set/removeHeader` 按大小写不敏感去重；`extractURL` 保留含 `=` 的 query 值并安全解码。
+  - `debug-logs.js` 在 `SURGE_ONLY` 模式下批量缓冲日志（满 50 条或 `Response.send` / `$.done` / `getLogEntries` 时落盘一次），避免开启 `logsMaxCount` 后每次 `$.info` 重写整份 `#sub-store-logs`。Node 与单测仍保持即时落盘。
 
 ### 存储
 
@@ -120,7 +136,7 @@ $platform = "Surge"
 - `#sub-store-cached-check`
 - `#sub-store-cached-last-good`（只给 `keep_last`）
 
-`backend/src/utils/cache-shards.js`：序列化后不超过 64 KiB 的映射保持旧的单值布局。更大则迁到 version 1 manifest，每个条目一个键 `` `${storeKey}:v1:${md5(id)}` ``。单值上限 `SHARD_BYTES` = 3 MiB（UTF-8，`TextEncoder`）。超限的单条跳过，不拆块。旧布局仍可读。迁移不延长 TTL。`/api/utils/refresh` 调用各缓存的 `revokeAll()`，并清掉已登记分片。`scriptResourceCache.revokeAll()` 会再清 check 和 last-good；`miscs.js` 里也会分别调用。
+`backend/src/utils/cache-shards.js`：`#sub-store-cached-resource`、`#sub-store-cached-script-resource`、`#sub-store-cached-output`、`#sub-store-cached-check` 与 `#sub-store-cached-last-good` 均接入分片。序列化后不超过 64 KiB 的映射保持旧的单值布局；更大则迁到 version 1 manifest，每个条目一个键 `` `${storeKey}:v1:${md5(id)}` ``。单值上限 `SHARD_BYTES` = 3 MiB（UTF-8，`TextEncoder` 复用单例），超限单条跳过不拆块。旧布局仍可读，迁移不延长 TTL。冷启动按单键懒读（`readEntry`），已分片后的单键写入与过期删除走 O(1) 增量路径（`writeEntries` / `deleteEntries`），不加载无关分片，且键集合未变时跳过 manifest 重写。`/api/utils/refresh` 调用各缓存的 `revokeAll()` 并按 manifest 清掉全部已登记分片；`scriptResourceCache.revokeAll()` 会连带清 check 和 last-good，`miscs.js` 里也会分别调用。
 
 同一次运行内的去重不是缓存：
 
@@ -145,10 +161,13 @@ https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork/main/scripts/check/geo.j
 | `time_budget` | 毫秒。用尽后不再启动新节点。未启动的节点保留原名，不把失败写入缓存。安全上限 880000 毫秒（880 秒），给 Surge 900 秒脚本超时留余量。省略、空、0 都是关闭 |
 | `keep_last` | 默认关。开启后，失败、超时或被 `time_budget` 跳过时，沿用该节点上次成功结果。成功会覆盖存储。失败不写也不擦。输出不加标记 |
 | `keep_last_max_age` | 纯数字是毫秒；也接受 `3600s`、`24h`、`7d`。省略、空、0 表示一直保留到更新的成功或刷新 |
+| `prioritize_stale` | 默认关。配合 `keep_last=true` 使用时，将未命中缓存的节点按“从未成功优先、其次 `savedAt` 最早”排序探测，不改变返回数组的节点顺序 |
+
+启用 `cache` 时，执行网络探测前先做同步预扫描，优先应用已缓存或共享检测结果，使 `time_budget` 全部用于未缓存节点；结束时经 `$.info` 输出单行 `[geo] total=... cache=... shared=... ok=... failed=... keepLast=... budgetSkipped=... incompatible=... elapsed=...ms` 汇总日志。
 
 `keep_last` 用与 TTL 缓存相同的 `cacheId`，存在 `#sub-store-cached-last-good`，不受 `scriptCacheTtl` 过期。这是全局 TTL 规则的唯一例外。刷新和 clear-cache 仍会删掉它。
 
-示例：`keep_last=true&keep_last_max_age=7d`。
+示例：`keep_last=true&keep_last_max_age=7d&prioritize_stale=true`。
 
 ### 定时任务与 prefetch
 
@@ -205,7 +224,7 @@ GitHub cron 是 UTC。台北时间是 UTC+8，无夏令时。
 
 `publish-dist` 比较 `HEAD` 与最新 Release 说明里的 `Built from`。schedule 只在两者不同时构建。还没有 Release，或说明里没有这一行时，schedule 会构建。`workflow_dispatch` 即使 SHA 相同也构建，并用 `gh release upload --clobber` 更新同一 version tag 的资产。比较脚本是 `.github/scripts/dist_source_sha.py`。用 `GITHUB_TOKEN` 推上去的提交不会再触发 `push` 工作流。`sync-upstream` 仅在 `backend/package.json` 变化、重套了 redirect/CORS 补丁，或刷新了 `dist/Surge-Beta.sgmodule` 时，再用 `GITHUB_TOKEN` dispatch 一次 `publish-dist`。其他 main 提交等 schedule。
 
-`publish-frontend` 按本仓库 `gh-pages` 的 `frontend-version.txt` 比较 `sha`、`base`（`/Sub-Store-Fork/`）、`api`（`https://sub.store`）和 `patches`。补丁戳来自 `prepare_frontend_pages.py` 的 `PATCH_STAMP`，当前是 `subpath-routes-1-surge-session-2-repo-pages-1`。后端合并不会让前端补丁上线。`force=true` 时即使已部署也重建。`gh-pages` 还不存在时会创建该分支，不是 force-push，也不动 `main`。
+`publish-frontend` 按本仓库 `gh-pages` 的 `frontend-version.txt` 比较 `sha`、`base`（`/Sub-Store-Fork/`）、`api`（`https://sub.store`）和 `patches`。补丁戳来自 `prepare_frontend_pages.py` 的 `PATCH_STAMP`，当前是 `subpath-routes-2-pwa-autoupdate-1-surge-session-3-repo-pages-1`。后端合并不会让前端补丁上线。`force=true` 时即使已部署也重建。`gh-pages` 还不存在时会创建该分支，不是 force-push，也不动 `main`。
 
 `ci.yml` 就是 PR 检查。它调用 `.github/scripts/run_fork_publish_checks.sh`，不发布。检查顺序：
 
@@ -223,14 +242,24 @@ GitHub cron 是 UTC。台北时间是 UTC+8，无夏令时。
 前端补丁在 `.github/scripts/prepare_frontend_pages.py`，锚点消失就失败，不会静默跳过：
 
 - Vite base `/Sub-Store-Fork/`，`VITE_API_URL=https://sub.store`。拒绝 base `/`。
-- 子路径下的流量页、关于页链接、复制 API 链接、PWA scope。
-- `.github/scripts/fork-frontend/forkRequestGuard.ts`：API 并发最多 2，给 Surge 的 3 个 webview 脚本槽留一个。刷新或恢复后的重型预览要等用户操作。构建后的页面有 `<meta name="sub-store-fork" content="api-cap-2 skip-restored-preview" />`。
+- 子路径路由修正：流量页（`src/store/subs.ts`）、关于页链接（`router-link`）、复制 API 链接（`APISetting.vue`）、原始文本预览路径（`src/components/PreviewPanel.vue` 的 `/preview` 加上 `BASE_URL`），以及 PWA scope / `navigateFallback`。
+- PWA 自动更新：`vite.config.ts` 的 `registerType` 由 `"prompt"` 改为 `"autoUpdate"`，确保 `sw.js` 含 `skipWaiting` 与 `clientsClaim`，避免 iOS PWA 长期停留在旧版本缓存。
+- `.github/scripts/fork-frontend/forkRequestGuard.ts`：API 并发上限 2（为 Surge 3 个 webview 脚本槽留 1 个余量），3 级优先级队列（写操作/预览/刷新/同步/下载优先于普通列表读取，普通读取优先于 `/api/sub/flow`），页面处于 `hidden` 时挂起排队中的 `/api/sub/flow` 并在 `visibilitychange` 恢复；`FilePreview.vue` 的原始 `axios.get` 改走 `queuedPreviewGet`（共享 2 槽与 `apiRequestTimeout`）；刷新或恢复后的重型预览仍等用户操作。
+- 渲染与连接预热：`index.html` 注入 `<meta name="sub-store-fork" content="api-cap-2 skip-restored-preview" />`、`<link rel="preconnect" href="https://sub.store" crossorigin />`，以及 `.compare-table-body .compare-table-row` 的 CSS `content-visibility:auto;contain-intrinsic-size:auto 56px`。
 
 本仓库 `main.yml` 仍监听 `master` 的 `backend/package.json`，另有 `workflow_dispatch`。默认分支是 `main`，push 到 `main` 不会跑它。不要运行它：Release 步骤之后会 force-push `release` 分支。`star-history.yml` 仍是上游的每天 `0 0 * * *`（00:00 UTC，08:00 台北）加 `workflow_dispatch`。文件保持与上游一致。不要在这里改它。
 
 ## 5. 上游同步
 
-运行的是本仓库的 `sync-upstream.yml`。
+本仓库维护三条上游基线，策略分层如下：
+
+| 上游 | 监测/同步工作流 | 同步策略 | 漂移或失败处理 |
+| --- | --- | --- | --- |
+| 后端 `sub-store-org/Sub-Store` (`master`) | `sync-upstream.yml`（每天 04:17 UTC） | 快进 `upstream` → 合并进 `main` → 重套前端重定向/CORS 锚点 → 校验运行时标记 → 跑全套发布检查后直推 `main` | 冲突开 `sync/upstream` PR；检查失败开 `sync/tests-failed` PR；锚点缺失或未产出冲突时写 Job Summary 并失败退出（不推 `main`，不开 Issues） |
+| 前端 `sub-store-org/Sub-Store-Front-End` (`master`/release) | `publish-frontend.yml`（每天 05:23 UTC） | 不 vendoring；每次按 `frontend-version.txt` 比对 `sha`/`base`/`api`/`patches`，有变化即浅拉上游并运行 `prepare_frontend_pages.py --patch`、`pnpm build`、`--finalize-site` 后推 `gh-pages` | 任意补丁锚点消失或 `check_dist`（含 `sw.js` `autoUpdate`、子路径扫描）失败时立即报错中止，不覆盖 `gh-pages` |
+| `geo.js` `xream/scripts` (`check/geo.js`) | `sync-upstream.yml` 末尾非阻塞步骤（`check_geo_upstream.py`） | 比对上游 `geo.js` blob SHA 与 `scripts/check/GEO-NOTICE.md` 记录值（当前 `1d573206451a140b3ba3964b07f7de392e7e5ccd`） | `continue-on-error: true`，不阻塞后端同步；发生漂移时发 `::notice::` 并写入 Job Summary，人工评估差异后移植到 `scripts/check/geo.js` 并同步更新 `geo.upstream.js` 与 `GEO-NOTICE.md` |
+
+后端 `sync-upstream.yml` 执行步骤：
 
 1. checkout `main`，设置 `github-actions[bot]` 的 `user.name` / `user.email`，然后 `git merge upstream/master`。Runner 上的 Git 没有身份时会立刻 `fatal: empty ident name`，而且写不出冲突索引。
 2. 快进 `upstream` 到上游 `master`。只镜像 origin 还没有的标签，不移动已有标签。不能快进就失败，不强推。
@@ -248,7 +277,7 @@ GitHub cron 是 UTC。台北时间是 UTC+8，无夏令时。
 - `backend/src/test/vendor/express-cors.spec.js`：断言继续引用 `NON_NODE_CORS_DEFAULT`，让测试跟着合并后的列表走。
 - `backend/src/core/proxy-utils/parsers/peggy/surge.js`：保留上游新增的语法，同时保留 fork 的预编译导入（`fork: peggy parsers are precompiled`、`export const grammars`、`import compiledParser from './generated/surge.js'`）。`getParser()` 把 `setSurgeXhttpOption` 传给 `compiledParser.parse`，不要写回 `peggy.generate`。`generated/` 由 `precompile-peggy.js` 生成，不入库。语法源是文件里的 `String.raw` 模板，没有单独的 `.peg`。以后这个文件再冲突，照此处理。PR #19 就是这样解的。
 
-还必须留下的 fork 行为见 `apply-fork-runtime.mjs` 的 `need()` 列表，以及 `docs/fork-maintenance.md` 的「必须保留的 fork 修改」表。核心是：Pages 302 与 CORS、前端补丁锚点、请求去重、输出缓存、检测缓存、分片、`keep_last`、getFlag 与 Peggy 预编译、file 路由在 sub-store-1、按文件写 store、Surge-only 构建、模块渲染默认关闭任务。
+还必须留下的 fork 行为见 `apply-fork-runtime.mjs` 的 `need()` 列表，以及 `docs/fork-maintenance.md` 的「必须保留的 fork 修改」表。核心是：Pages 302 与 CORS、前端子路径/PWA autoUpdate/3 级队列补丁锚点、请求去重、输出缓存（含延迟解析与设置排除）、检测缓存与流量头回填、O(1) 增量分片（含 `resource-cache`）、`keep_last`/`prioritize_stale`、getFlag 与 Peggy 预编译及打包期语法剥离、`@noble/*` 去重、纯文件元数据路由在 `sub-store-0` 而重型 file 路由在 `sub-store-1`、`express.js` 容错与 Surge 批量日志、按文件写 store、Surge-only 构建、模块渲染默认关闭任务、`geo.js` 上游漂移监控。
 
 ### 为什么同步 PR 必须用 merge commit
 
@@ -323,7 +352,7 @@ cmp /tmp/Surge-Beta.sgmodule dist/Surge-Beta.sgmodule
 
 功能加在现有边界上：
 
-- Surge HTTP API：按路由放进 `sub-store-0` 或 `sub-store-1`。解析器、文件和重型下载留在 sub-store-1。简单包不要 import ProxyUtils。
+- Surge HTTP API：按路由放进 `sub-store-0` 或 `sub-store-1`。纯列表/元数据路由（如 `file-metadata.js`）可放进 `sub-store-0`，但不得引入 `ProxyUtils`/`sync.js`，且注册阶段不得写主 store。解析器、`/api/file/:name`、`/share/file/:name` 和重型下载留在 `sub-store-1`。
 - 新的宿主专用语句放进 `@non-surge-start` / `@non-surge-end`，让 Surge 包剥掉，Node 和其他产物留着。
 - 新的导出格式加 producer，并给 `golden-snapshot.spec.js` 的 `TARGETS` 补快照。不要删 Loon、QX 或其他格式。
 - 模块的公开 URL、CORS、路由和定时任务默认值改 `render_surge_beta_module.py`，并保证 `--check` 能把公开模块还原成 `config/Surge-Beta.sgmodule`。
@@ -348,7 +377,7 @@ cmp /tmp/Surge-Beta.sgmodule dist/Surge-Beta.sgmodule
 - 设置接口写不进 TTL 0 的问题已修复。`resourceCacheTtl`、`headersCacheTtl`、`scriptCacheTtl` 保存 `0` 或 `"0"` 后会关闭对应缓存；空值恢复缺省。规则在第 2 节。
 - PR #12 已关闭、未合并。不要重新打开并合并它的上游 head。`sync/upstream` 分支保留，以后的同步可能再次使用它。
 - squash 会让 Release 说明里的 `Upstream tree`（`git merge-base`）停在更老的共同祖先。以最新 Release 说明为准，不要把文档里的旧 SHA 当成现状。
-- Pages 源是 `gh-pages` 的 `/`。补丁戳是 `subpath-routes-1-surge-session-2-repo-pages-1`，base 是 `/Sub-Store-Fork/`，api 是 `https://sub.store`。构建后的首页应含 `<meta name="sub-store-fork" content="api-cap-2 skip-restored-preview" />`。`docs/performance-plan-audit.md` 里“补丁尚未部署”的句子已经过时。`publish-frontend` 在 `gh-pages` 还不存在时会创建该分支，不是 force-push。
+- Pages 源是 `gh-pages` 的 `/`。补丁戳是 `subpath-routes-2-pwa-autoupdate-1-surge-session-3-repo-pages-1`，base 是 `/Sub-Store-Fork/`，api 是 `https://sub.store`。构建后的首页应含 `<meta name="sub-store-fork" content="api-cap-2 skip-restored-preview" />`、`rel="preconnect"` 与 `content-visibility:auto`，`sw.js` 应含 `skipWaiting` 与 `clientsClaim`。`docs/performance-plan-audit.md` 里“补丁尚未部署”的句子已经过时。`publish-frontend` 在 `gh-pages` 还不存在时会创建该分支，不是 force-push。
 - 前端默认 API 超时在上游是 50000 毫秒，可被 `localStorage.apiRequestTimeout` 覆盖。浏览器超时不会停掉已经在跑的 Surge 脚本。`time_budget` 要留在这个超时之内，或让用户把前端超时调大。
 - `dedup_target` 按 server、port、类型合并，凭据不同也可能共享。它不是出口 IP 的证明。
 - 分片解决单值约 4 MB 的 iOS 限制，不保证设备总空间够用。
@@ -372,3 +401,5 @@ cmp /tmp/Surge-Beta.sgmodule dist/Surge-Beta.sgmodule
 - **#18** 合并：设置接口把 `resourceCacheTtl`、`headersCacheTtl`、`scriptCacheTtl` 的 `0` 或 `"0"` 存下来，对应缓存关闭；空值恢复缺省。
 - **#20** 合并：发布、前端 Pages 和上游同步改在本仓库执行，用 `GITHUB_TOKEN`。公开链接改为第 1 节。产物仓库 `ahuai6/Sub-Store-Fork-Dist` 随后已由用户删除；`FORK_REPO_TOKEN` 和 `PUBLIC_DIST_TOKEN` 不再使用。
 - **#19** 用 merge commit 合并：上游 2.44.12–2.44.14 进入 `main`（`4c21f05b`）。2.44.12（`a032bc1e`）是 Surge VLESS XHTTP 扩展字段，2.44.13（`a9028cdd`）是 sing-box Snell 接受 mihomo 的 `userkey`，2.44.14（`2e7a63c6`）是 VMess、Trojan、VLESS 的 `ws-http-upgrade`。唯一冲突是 `parsers/peggy/surge.js`：保留上游语法，保留 fork 的预编译导入，`getParser()` 把 `setSurgeXhttpOption` 传给预编译解析器。以后该文件冲突照此处理。
+- **2026-11-20 第一轮审计修复（`31e63666`）**：合入上游 2.44.15–2.44.16 后完成 10 项逻辑修复，包括 `forkRequestGuard` 防 axios 0.27 槽位泄漏与中断清理、`cache-shards` 异常恢复/单次落盘/UTF-8 预算核算、`preview` 子订阅 `noCache` 隔离与 `preview-file` 元数据键、`geo.js` `surge_http_api` 方法转义与周期落盘、`Surge` 存储恢复同步与批量定时检查点，以及 `sync-upstream` 改用 Job Summary（不再依赖关闭的 GitHub Issues）。
+- **2026-11-20 全栈性能与体验增强（P1–P9）**：前端补丁升级至 `subpath-routes-2-pwa-autoupdate-1-surge-session-3-repo-pages-1`（修 `/preview` 子路径 404、PWA `autoUpdate`、3 级优先级队列与后台挂起 `/api/sub/flow`、`FilePreview` 走 `queuedPreviewGet`、`preconnect` 与大表 `content-visibility:auto`）；后端 `CacheShards` 实现 O(1) 增量读写删并将 `resource-cache` 接入分片；`download`/`sync`/`preview` 消除重复解析并回填默认流量头缓存；`output-cache` 排除无关设置并摘要大文本；`bundle-esbuild` 剥离 Peggy 运行时无用语法模板并去重 `@noble/*`；`sub-store-0` 承接纯文件元数据路由（`/api/files`、`/api/wholeFiles`、`/api/wholeFile/:name`）；`express.js` 非 Node 路由容错加固与 `SURGE_ONLY` 批量日志；`geo.js` 增加缓存预扫描、`prioritize_stale` 轮换调度、单行汇总日志与 `xream/scripts` 上游漂移监控。

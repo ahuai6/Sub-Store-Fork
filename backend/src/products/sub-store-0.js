@@ -1,9 +1,9 @@
 /**
  * 路由拆分 - 本文件只包含不涉及到解析器的 RESTFul API
  *
- * fork: sub-store-0 does not import ProxyUtils. File routes live on
- * sub-store-1. The published Surge module matches those URLs on the core
- * script, which is listed first, so this catch-all does not see them.
+ * fork: sub-store-0 does not import ProxyUtils. Pure file metadata routes
+ * (/api/files, /api/wholeFiles, /api/wholeFile/:name) run here, while
+ * /api/file/:name and /share/file/:name stay on sub-store-1.
  */
 
 import { version } from '../../package.json';
@@ -29,6 +29,7 @@ import registerArchiveRoutes from '@/restful/archives';
 import registerModuleRoutes from '@/restful/module';
 import registerLogRoutes from '@/restful/logs';
 import registerAgeRoutes from '@/restful/age';
+import registerFileMetadataRoutes from '@/restful/file-metadata';
 
 migrate();
 serve();
@@ -41,6 +42,7 @@ function serve() {
     registerSubscriptionRoutes($app);
     registerTokenRoutes($app);
     registerModuleRoutes($app);
+    registerFileMetadataRoutes($app);
     registerArtifactRoutes($app);
     registerSettingRoutes($app);
     registerSortRoutes($app);

@@ -152,6 +152,8 @@ export class BoundedCache {
         this._seq = 0;
         this._loaded = false;
         this._entries = {};
+        this._dirty = new Set();
+        this._deleted = new Set();
     }
 
     get entries() {
@@ -162,6 +164,8 @@ export class BoundedCache {
     set entries(value) {
         this._loaded = true;
         this._entries = value;
+        this._dirty.clear();
+        this._deleted.clear();
     }
 
     _ensureLoaded() {
@@ -170,37 +174,92 @@ export class BoundedCache {
         this._load();
     }
 
+    _applyPendingOverlay(base) {
+        for (const id of this._deleted) {
+            delete base[id];
+        }
+        for (const id of this._dirty) {
+            if (Object.prototype.hasOwnProperty.call(this._entries, id)) {
+                base[id] = this._entries[id];
+            }
+        }
+        this._dirty.clear();
+        this._deleted.clear();
+        return base;
+    }
+
     _load() {
         if (this.shards) {
-            this._entries = this.shards.load();
+            this._entries = this._applyPendingOverlay(this.shards.load());
             if (this._dropExpired(false)) this._persist();
             return;
         }
         const raw = this._read(this.storeKey);
         if (!raw) {
-            this._entries = {};
+            this._entries = this._applyPendingOverlay({});
             return;
         }
         try {
             const parsed = JSON.parse(raw);
-            this._entries =
+            this._entries = this._applyPendingOverlay(
                 parsed && typeof parsed === 'object' && !Array.isArray(parsed)
                     ? parsed
-                    : {};
+                    : {},
+            );
         } catch (e) {
             $.error(
                 `解析持久化缓存中的 ${this.storeKey} 失败, 重置为 {}, 错误: ${
                     e?.message ?? e
                 }`,
             );
-            this._entries = {};
+            this._entries = this._applyPendingOverlay({});
             this._write('{}', this.storeKey);
         }
         this._dropExpired(false);
     }
 
     _persist() {
-        if (this.shards) return this.shards.save(this._entries);
+        if (this.shards) {
+            if (!this._loaded) {
+                const now = this.now();
+                const dirtyMap = {};
+                const deleteList = new Set(this._deleted);
+                for (const id of this._dirty) {
+                    const cached = this._entries[id];
+                    if (!cached || !cached.time || this._expires(cached) <= now) {
+                        delete this._entries[id];
+                        deleteList.add(id);
+                    } else {
+                        dirtyMap[id] = cached;
+                    }
+                }
+                let ok = true;
+                let fallback = false;
+                if (Object.keys(dirtyMap).length > 0) {
+                    const res = this.shards.writeEntries(dirtyMap);
+                    if (res === null) fallback = true;
+                    else ok = res !== false;
+                }
+                if (ok && !fallback && deleteList.size > 0) {
+                    const res = this.shards.deleteEntries([...deleteList]);
+                    if (res === null) fallback = true;
+                    else ok = res !== false;
+                }
+                if (!fallback) {
+                    if (ok) {
+                        this._dirty.clear();
+                        this._deleted.clear();
+                    }
+                    return ok;
+                }
+                this._ensureLoaded();
+            }
+            this._dirty.clear();
+            this._deleted.clear();
+            return this.shards.save(this._entries);
+        }
+        this._dirty.clear();
+        this._deleted.clear();
         return this._write(JSON.stringify(this._entries), this.storeKey);
     }
 
@@ -235,6 +294,8 @@ export class BoundedCache {
 
     revokeAll() {
         if (this._batch) this._batch.reset();
+        this._dirty.clear();
+        this._deleted.clear();
         if (this.shards && !this._loaded) {
             this._entries = {};
             this._loaded = true;
@@ -256,7 +317,10 @@ export class BoundedCache {
         if (!(this.resolveTtl() > 0)) return null;
         let cached;
         if (!this._loaded && this.shards) {
-            cached = this.shards.readEntry(id);
+            if (this._deleted.has(id)) return null;
+            cached = Object.prototype.hasOwnProperty.call(this._entries, id)
+                ? this._entries[id]
+                : this.shards.readEntry(id);
         } else {
             this._ensureLoaded();
             cached = this._entries[id];
@@ -264,6 +328,13 @@ export class BoundedCache {
         if (!cached || !cached.time) return null;
         // Expired entries are not reusable, even when id still matches.
         if (this.now() >= this._expires(cached)) {
+            if (!this._loaded && this.shards && this.shards.isSharded()) {
+                delete this._entries[id];
+                this._dirty.delete(id);
+                this._deleted.add(id);
+                this._schedulePersist();
+                return null;
+            }
             this._ensureLoaded();
             if (Object.prototype.hasOwnProperty.call(this._entries, id)) {
                 delete this._entries[id];
@@ -308,6 +379,12 @@ export class BoundedCache {
             return false;
         }
         this._seq = nextSeq;
+        if (this.shards && !this._loaded && this.shards.isSharded()) {
+            this._entries[id] = entry;
+            this._dirty.add(id);
+            this._deleted.delete(id);
+            return this._schedulePersist();
+        }
         this._ensureLoaded();
         this._entries[id] = entry;
         this._dropExpired(false);

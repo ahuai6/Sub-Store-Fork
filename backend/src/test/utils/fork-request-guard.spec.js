@@ -9,7 +9,7 @@ const guardPath = path.resolve(
     '../../../../.github/scripts/fork-frontend/forkRequestGuard.ts',
 );
 
-function loadGuardModule() {
+function loadGuardModule(globals = {}) {
     const out = buildSync({
         entryPoints: [guardPath],
         bundle: false,
@@ -19,7 +19,7 @@ function loadGuardModule() {
     });
     const code = out.outputFiles[0].text;
     const mod = { exports: {} };
-    vm.runInNewContext(code, {
+    const sandbox = {
         module: mod,
         exports: mod.exports,
         Promise,
@@ -29,7 +29,11 @@ function loadGuardModule() {
         Number,
         String,
         Math,
-    });
+        Boolean,
+        ...globals,
+    };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(code, sandbox);
     return mod.exports;
 }
 
@@ -172,5 +176,151 @@ describe('frontend forkRequestGuard queue', function () {
             'slot-5',
         ]);
         expect(started).to.deep.equal(['slot-1', 'slot-2', 'slot-5']);
+    });
+
+    it('prioritizes interactive/mutating requests over reads and /api/sub/flow', async function () {
+        const { installForkApiQueue, resolveApiPriority } = loadGuardModule();
+        expect(resolveApiPriority({ method: 'POST', url: '/api/subs' })).to.equal(2);
+        expect(resolveApiPriority({ method: 'GET', url: '/api/utils/refresh' })).to.equal(2);
+        expect(resolveApiPriority({ method: 'GET', url: '/api/subs' })).to.equal(1);
+        expect(resolveApiPriority({ method: 'GET', url: '/api/sub/flow/demo' })).to.equal(0);
+
+        const gates = [];
+        const started = [];
+        const service = createAxios027Stub(async (config) => {
+            started.push(config.id);
+            await new Promise((resolve) => gates.push(resolve));
+            return { status: 200, config, data: config.id };
+        });
+        installForkApiQueue(service);
+
+        // Fill both slots first.
+        const r1 = service.request({ id: 'hold-1', method: 'GET', url: '/api/subs' });
+        const r2 = service.request({ id: 'hold-2', method: 'GET', url: '/api/collections' });
+        await new Promise((r) => setTimeout(r, 10));
+
+        // Enqueue low -> normal -> high while both slots are busy.
+        const low = service.request({ id: 'low-flow', method: 'GET', url: '/api/sub/flow/a' });
+        const normal = service.request({ id: 'norm-files', method: 'GET', url: '/api/wholeFiles' });
+        const high = service.request({ id: 'high-patch', method: 'PATCH', url: '/api/sub/a' });
+        await new Promise((r) => setTimeout(r, 10));
+
+        // Release slots one by one so priority order is deterministic.
+        while (gates.length > 0 || started.length < 5) {
+            if (gates.length > 0) gates.shift()();
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        await Promise.all([r1, r2, low, normal, high]);
+        expect(started).to.deep.equal([
+            'hold-1',
+            'hold-2',
+            'high-patch',
+            'norm-files',
+            'low-flow',
+        ]);
+    });
+
+    it('defers queued /api/sub/flow while hidden and resumes when page becomes visible', async function () {
+        let visibilityState = 'hidden';
+        const listeners = [];
+        const fakeDoc = {
+            get visibilityState() {
+                return visibilityState;
+            },
+            addEventListener(type, fn) {
+                if (type === 'visibilitychange') listeners.push(fn);
+            },
+        };
+        const { installForkApiQueue } = loadGuardModule({ document: fakeDoc });
+        const started = [];
+        const service = createAxios027Stub(async (config) => {
+            started.push(config.id);
+            return { status: 200, config, data: config.id };
+        });
+        installForkApiQueue(service);
+
+        const flowPromise = service.request({
+            id: 'bg-flow',
+            method: 'GET',
+            url: '/api/sub/flow/demo',
+        });
+        const corePromise = service.request({
+            id: 'fg-core',
+            method: 'GET',
+            url: '/api/subs',
+        });
+
+        await corePromise;
+        await new Promise((r) => setTimeout(r, 15));
+        // Core request ran even while hidden; low-priority flow stays deferred.
+        expect(started).to.deep.equal(['fg-core']);
+
+        visibilityState = 'visible';
+        listeners.forEach((fn) => fn());
+        await flowPromise;
+        expect(started).to.deep.equal(['fg-core', 'bg-flow']);
+    });
+
+    it('shares the 2-slot cap and applies apiRequestTimeout in queuedPreviewGet', async function () {
+        const fakeStorage = {
+            getItem(key) {
+                return key === 'apiRequestTimeout' ? '12345' : null;
+            },
+        };
+        const { installForkApiQueue, queuedPreviewGet } = loadGuardModule({
+            localStorage: fakeStorage,
+        });
+        const gates = [];
+        const started = [];
+        const service = createAxios027Stub(async (config) => {
+            started.push(config.id);
+            await new Promise((resolve) => gates.push(resolve));
+            return { status: 200, config, data: config.id };
+        });
+        installForkApiQueue(service);
+
+        const r1 = service.request({ id: 'slot-1', method: 'GET', url: '/api/subs' });
+        const r2 = service.request({ id: 'slot-2', method: 'GET', url: '/api/collections' });
+        await new Promise((r) => setTimeout(r, 10));
+
+        let seenConfig = null;
+        const fakeAxios = {
+            async get(url, cfg) {
+                started.push(`preview:${url}`);
+                seenConfig = cfg;
+                return { data: 'ok' };
+            },
+        };
+        const flowPending = service.request({
+            id: 'queued-flow',
+            method: 'GET',
+            url: '/api/sub/flow/a',
+        });
+        const previewPromise = queuedPreviewGet(fakeAxios, 'https://sub.store/download/a', {
+            responseType: 'text',
+        });
+        await new Promise((r) => setTimeout(r, 10));
+        expect(started).to.deep.equal(['slot-1', 'slot-2']);
+
+        gates.shift()();
+        await previewPromise;
+        expect(seenConfig.timeout).to.equal(12345);
+        expect(started.slice(0, 3)).to.deep.equal([
+            'slot-1',
+            'slot-2',
+            'preview:https://sub.store/download/a',
+        ]);
+
+        while (gates.length > 0) {
+            gates.shift()();
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        await Promise.all([r1, r2, flowPending]);
+        expect(started).to.deep.equal([
+            'slot-1',
+            'slot-2',
+            'preview:https://sub.store/download/a',
+            'queued-flow',
+        ]);
     });
 });

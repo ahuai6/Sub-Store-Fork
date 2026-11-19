@@ -64,6 +64,17 @@ function formatAgeSafeUrls(errors) {
     return Object.keys(errors).map(maskAgeSecretInUrl).join(', ');
 }
 
+function parseRawProxyEntries(raw, parsedProxies) {
+    const items = Array.isArray(raw) ? raw : [raw];
+    return items
+        .map((item, idx) =>
+            Array.isArray(parsedProxies?.[idx])
+                ? parsedProxies[idx]
+                : ProxyUtils.parse(item),
+        )
+        .flat();
+}
+
 function isMergeSourceMode(mode) {
     return MERGE_SOURCE_MODES.includes(mode);
 }
@@ -319,7 +330,9 @@ async function produceArtifact({
         let sourceRaw = [];
 
         try {
+            const deferDownloadPreprocess = produceType !== 'raw';
             let raw;
+            let parsedProxies;
             if (
                 content &&
                 !['localFirst', 'remoteFirst'].includes(mergeSources)
@@ -344,7 +357,13 @@ async function produceArtifact({
                                     awaitCustomCache,
                                     noCache || sub.noCache,
                                     true,
-                                    { returnRaw: true, noFlow: skipFlow },
+                                    {
+                                        returnRaw: true,
+                                        deferPreprocess:
+                                            deferDownloadPreprocess,
+                                        returnParsed: deferDownloadPreprocess,
+                                        noFlow: skipFlow,
+                                    },
                                 );
                             } catch (err) {
                                 errors[url] = err;
@@ -359,6 +378,9 @@ async function produceArtifact({
                 );
                 raw = downloaded.map((i) => i.result ?? i);
                 sourceRaw = downloaded.map((i) => i.raw ?? i);
+                parsedProxies = downloaded.map((i) =>
+                    Array.isArray(i?.proxies) ? i.proxies : null,
+                );
 
                 if (Object.keys(errors).length > 0) {
                     const message = `订阅 ${
@@ -381,9 +403,11 @@ async function produceArtifact({
                 if (mergeSources === 'localFirst') {
                     raw.unshift(content);
                     sourceRaw.unshift(content);
+                    parsedProxies.unshift(null);
                 } else if (mergeSources === 'remoteFirst') {
                     raw.push(content);
                     sourceRaw.push(content);
+                    parsedProxies.push(null);
                 }
             } else if (
                 sub.source === 'local' &&
@@ -409,7 +433,13 @@ async function produceArtifact({
                                     awaitCustomCache,
                                     noCache || sub.noCache,
                                     true,
-                                    { returnRaw: true, noFlow: skipFlow },
+                                    {
+                                        returnRaw: true,
+                                        deferPreprocess:
+                                            deferDownloadPreprocess,
+                                        returnParsed: deferDownloadPreprocess,
+                                        noFlow: skipFlow,
+                                    },
                                 );
                             } catch (err) {
                                 errors[url] = err;
@@ -424,6 +454,9 @@ async function produceArtifact({
                 );
                 raw = downloaded.map((i) => i.result ?? i);
                 sourceRaw = downloaded.map((i) => i.raw ?? i);
+                parsedProxies = downloaded.map((i) =>
+                    Array.isArray(i?.proxies) ? i.proxies : null,
+                );
 
                 if (Object.keys(errors).length > 0) {
                     const message = `订阅 ${
@@ -446,9 +479,11 @@ async function produceArtifact({
                 if (sub.mergeSources === 'localFirst') {
                     raw.unshift(sub.content);
                     sourceRaw.unshift(sub.content);
+                    parsedProxies.unshift(null);
                 } else if (sub.mergeSources === 'remoteFirst') {
                     raw.push(sub.content);
                     sourceRaw.push(sub.content);
+                    parsedProxies.push(null);
                 }
             }
             const outputMaterial = subscriptionOutputMaterial(sub, {
@@ -481,9 +516,7 @@ async function produceArtifact({
                     : result;
             }
             // parse proxies
-            let proxies = (Array.isArray(raw) ? raw : [raw])
-                .map((i) => ProxyUtils.parse(i))
-                .flat();
+            let proxies = parseRawProxyEntries(raw, parsedProxies);
 
             proxies.forEach((proxy) => {
                 proxy._subName = sub.name;
@@ -617,6 +650,7 @@ async function produceArtifact({
                         $.info(`正在处理子订阅：${sub.name}...`);
                         let raw;
                         let sourceRaw;
+                        let parsedProxies;
                         if (
                             sub.source === 'local' &&
                             !['localFirst', 'remoteFirst'].includes(
@@ -647,6 +681,8 @@ async function produceArtifact({
                                                 true,
                                                 {
                                                     returnRaw: true,
+                                                    deferPreprocess: true,
+                                                    returnParsed: true,
                                                     noFlow:
                                                         skipFlow || sub.noFlow,
                                                 },
@@ -666,6 +702,9 @@ async function produceArtifact({
                             );
                             raw = downloaded.map((i) => i.result ?? i);
                             sourceRaw = downloaded.map((i) => i.raw ?? i);
+                            parsedProxies = downloaded.map((i) =>
+                                Array.isArray(i?.proxies) ? i.proxies : null,
+                            );
 
                             if (Object.keys(errors).length > 0) {
                                 const message = `订阅 ${
@@ -688,15 +727,17 @@ async function produceArtifact({
                             if (sub.mergeSources === 'localFirst') {
                                 raw.unshift(sub.content);
                                 sourceRaw.unshift(sub.content);
+                                parsedProxies.unshift(null);
                             } else if (sub.mergeSources === 'remoteFirst') {
                                 raw.push(sub.content);
                                 sourceRaw.push(sub.content);
+                                parsedProxies.push(null);
                             }
                         }
                         const currentRaw = Array.isArray(sourceRaw)
                             ? sourceRaw
                             : [sourceRaw];
-                        pending[name] = { raw, sub, subMode };
+                        pending[name] = { raw, parsedProxies, sub, subMode };
                         rawResults[name] = currentRaw;
                     } catch (err) {
                         processed++;
@@ -762,11 +803,12 @@ async function produceArtifact({
 
             await Promise.all(
                 Object.keys(pending).map(async (name) => {
-                    const { raw, sub, subMode } = pending[name];
+                    const { raw, parsedProxies, sub, subMode } = pending[name];
                     try {
-                        let currentProxies = (Array.isArray(raw) ? raw : [raw])
-                            .map((i) => ProxyUtils.parse(i))
-                            .flat();
+                        let currentProxies = parseRawProxyEntries(
+                            raw,
+                            parsedProxies,
+                        );
 
                         currentProxies.forEach((proxy) => {
                             proxy._subName = sub.name;

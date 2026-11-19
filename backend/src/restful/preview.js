@@ -30,6 +30,17 @@ function formatAgeSafeUrls(errors) {
     return Object.keys(errors).map(maskAgeSecretInUrl).join(', ');
 }
 
+function parseRawProxyEntries(raw, parsedProxies) {
+    const items = Array.isArray(raw) ? raw : [raw];
+    return items
+        .map((item, idx) =>
+            Array.isArray(parsedProxies?.[idx])
+                ? parsedProxies[idx]
+                : ProxyUtils.parse(item),
+        )
+        .flat();
+}
+
 export default function register($app) {
     $app.post('/api/preview/sub', compareSub);
     $app.post('/api/preview/collection', compareCollection);
@@ -133,6 +144,7 @@ async function compareSub(req, res) {
         const target = req.query.target || 'JSON';
         let content;
         let sourceRaw;
+        let parsedProxies;
         if (
             sub.source === 'local' &&
             !['localFirst', 'remoteFirst'].includes(sub.mergeSources)
@@ -157,7 +169,11 @@ async function compareSub(req, res) {
                                 undefined,
                                 sub.noCache,
                                 true,
-                                { returnRaw: true },
+                                {
+                                    returnRaw: true,
+                                    deferPreprocess: true,
+                                    returnParsed: true,
+                                },
                             );
                         } catch (err) {
                             errors[url] = err;
@@ -172,6 +188,9 @@ async function compareSub(req, res) {
             );
             content = downloaded.map((i) => i.result ?? i);
             sourceRaw = downloaded.map((i) => i.raw ?? i);
+            parsedProxies = downloaded.map((i) =>
+                Array.isArray(i?.proxies) ? i.proxies : null,
+            );
 
             if (Object.keys(errors).length > 0) {
                 const message = `订阅 ${
@@ -194,9 +213,11 @@ async function compareSub(req, res) {
             if (sub.mergeSources === 'localFirst') {
                 content.unshift(sub.content);
                 sourceRaw.unshift(sub.content);
+                parsedProxies.unshift(null);
             } else if (sub.mergeSources === 'remoteFirst') {
                 content.push(sub.content);
                 sourceRaw.push(sub.content);
+                parsedProxies.push(null);
             }
         }
         const previewMaterial = buildOutputMaterial({
@@ -219,9 +240,7 @@ async function compareSub(req, res) {
             return;
         }
         // parse proxies
-        const original = (Array.isArray(content) ? content : [content])
-            .map((i) => ProxyUtils.parse(i))
-            .flat();
+        const original = parseRawProxyEntries(content, parsedProxies);
 
         // add id
         original.forEach((proxy, i) => {
@@ -321,6 +340,7 @@ async function compareCollection(req, res) {
                 try {
                     let raw;
                     let sourceRaw;
+                    let parsedProxies;
                     if (
                         sub.source === 'local' &&
                         !['localFirst', 'remoteFirst'].includes(
@@ -347,7 +367,11 @@ async function compareCollection(req, res) {
                                             undefined,
                                             sub.noCache,
                                             true,
-                                            { returnRaw: true },
+                                            {
+                                                returnRaw: true,
+                                                deferPreprocess: true,
+                                                returnParsed: true,
+                                            },
                                         );
                                     } catch (err) {
                                         errors[url] = err;
@@ -364,6 +388,9 @@ async function compareCollection(req, res) {
                         );
                         raw = downloaded.map((i) => i.result ?? i);
                         sourceRaw = downloaded.map((i) => i.raw ?? i);
+                        parsedProxies = downloaded.map((i) =>
+                            Array.isArray(i?.proxies) ? i.proxies : null,
+                        );
 
                         if (Object.keys(errors).length > 0) {
                             const message = `订阅 ${
@@ -386,15 +413,17 @@ async function compareCollection(req, res) {
                         if (sub.mergeSources === 'localFirst') {
                             raw.unshift(sub.content);
                             sourceRaw.unshift(sub.content);
+                            parsedProxies.unshift(null);
                         } else if (sub.mergeSources === 'remoteFirst') {
                             raw.push(sub.content);
                             sourceRaw.push(sub.content);
+                            parsedProxies.push(null);
                         }
                     }
                     const currentRaw = Array.isArray(sourceRaw)
                         ? sourceRaw
                         : [sourceRaw];
-                    pending[name] = { raw, sub };
+                    pending[name] = { raw, parsedProxies, sub };
                     rawResults[name] = currentRaw;
                 } catch (err) {
                     if (shouldFallbackIgnoreFailedRemoteSub(subMode)) {
@@ -455,11 +484,12 @@ async function compareCollection(req, res) {
         }
         await Promise.all(
             Object.keys(pending).map(async (name) => {
-                const { raw, sub } = pending[name];
+                const { raw, parsedProxies, sub } = pending[name];
                 try {
-                    let currentProxies = (Array.isArray(raw) ? raw : [raw])
-                        .map((i) => ProxyUtils.parse(i))
-                        .flat();
+                    let currentProxies = parseRawProxyEntries(
+                        raw,
+                        parsedProxies,
+                    );
                     currentProxies.forEach((proxy) => {
                         proxy._subName = sub.name;
                         proxy._subDisplayName = sub.displayName;

@@ -45,8 +45,33 @@ const OMITTED_SETTINGS = new Set([
     'scriptCacheTtl',
     'cacheThreshold',
     'outputCache',
+    'syncTime',
+    'syncPlatform',
+    'githubUser',
+    'githubApiUrl',
+    'githubApiTimeout',
+    'artifactSyncBatchSize',
+    'gistUpload',
+    'gistDownloadTokenStrategy',
+    'avatarUrl',
+    'artifactStore',
+    'artifactStoreStatus',
+    'theme',
+    'appearanceSetting',
+    'logsMaxCount',
+    'backendRequestConcurrency',
+    'backendRequestConcurrencyWaitTime',
     AGE_SECRET_KEY,
 ]);
+
+const LARGE_STRING_HASH_THRESHOLD = 256;
+
+function digestLargeString(value) {
+    if (typeof value === 'string' && value.length > LARGE_STRING_HASH_THRESHOLD) {
+        return `md5:${value.length}:${hex_md5(value)}`;
+    }
+    return value;
+}
 
 const OUTPUT_OFF = new Set(['false', '0', 'no', 'off']);
 
@@ -133,7 +158,24 @@ function normalizeRaw(raw) {
         }
         return out;
     }
-    return String(raw);
+    return digestLargeString(String(raw));
+}
+
+function normalizeSubsForKey(subs) {
+    if (!Array.isArray(subs)) return subs ?? null;
+    return subs.map((sub) => {
+        if (!sub || typeof sub !== 'object') return sub;
+        if (
+            typeof sub.content === 'string' &&
+            sub.content.length > LARGE_STRING_HASH_THRESHOLD
+        ) {
+            return {
+                ...sub,
+                content: digestLargeString(sub.content),
+            };
+        }
+        return sub;
+    });
 }
 
 function relevantSettings() {
@@ -159,7 +201,7 @@ export function buildOutputMaterial(fields = {}) {
         name: fields.name ?? null,
         displayName: fields.displayName ?? null,
         process: fields.process || [],
-        subs: fields.subs || null,
+        subs: normalizeSubsForKey(fields.subs),
         source: fields.source ?? null,
         mergeSources: fields.mergeSources ?? null,
         ignoreFailedRemoteSub: fields.ignoreFailedRemoteSub ?? null,

@@ -434,3 +434,11 @@ jobs:
             echo "::error title=Failed to create sync/upstream PR::Conflict branch sync/upstream was pushed, but PR creation failed. See Job Summary."
             exit 1
           fi
+
+      - name: Check xream/scripts geo.js upstream drift
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/check_geo_upstream.py

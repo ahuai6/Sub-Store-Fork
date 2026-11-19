@@ -974,4 +974,97 @@ describe('optimized geo.js', function () {
         // Checkpoint flushed at n2 (16s elapsed), plus final flush for n3.
         expect(env.cache.persists.length).to.be.at.least(2);
     });
+
+    it('satisfies cached nodes in a pre-pass before network probing under tight time_budget', async function () {
+        const infos = [];
+        const env = createEnv({ delayMs: 80 });
+        env.$.info = (msg) => infos.push(String(msg));
+
+        const cachedNode = {
+            name: 'cached-tail',
+            type: 'ss',
+            server: 'tail.example',
+            port: 443,
+        };
+        // Prime cache for cached-tail only.
+        await runOptimized([clone(cachedNode)], { cache: true }, env);
+        env.httpCalls.length = 0;
+        infos.length = 0;
+
+        // Place two slow uncached nodes BEFORE cached-tail with a 50ms budget:
+        // slow-1 exhausts the budget so slow-2 is skipped, yet pre-pass already
+        // satisfied cached-tail before network probing began.
+        const out = await runOptimized(
+            [
+                { name: 'slow-1', type: 'ss', server: 'head1.example', port: 443 },
+                { name: 'slow-2', type: 'ss', server: 'head2.example', port: 443 },
+                clone(cachedNode),
+            ],
+            { cache: true, concurrency: 1, time_budget: 50, retries: 0 },
+            env,
+        );
+        expect(out[1].name).to.equal('slow-2');
+        expect(out[2].name).to.equal('日本 Example - cached-tail');
+        expect(env.httpCalls).to.have.length(1);
+        const summary = infos.find((line) => line.startsWith('[geo] '));
+        expect(summary).to.include('total=3');
+        expect(summary).to.include('cache=1');
+        expect(summary).to.include('budgetSkipped=1');
+    });
+
+    it('probes never-succeeded and oldest-savedAt nodes first with prioritize_stale=true while keeping output order', async function () {
+        const probeOrder = [];
+        const lastGoodStore = {};
+        const env = createEnv({
+            bodyFor(node) {
+                probeOrder.push(node);
+                return {
+                    status: 200,
+                    body: JSON.stringify({ country: '美国', isp: 'ISP' }),
+                };
+            },
+        });
+        env.cache.lastGoodGet = (id) => lastGoodStore[id] || null;
+        env.cache.lastGoodSet = (id, value) => {
+            lastGoodStore[id] = value;
+        };
+        env.cache.lastGoodFlush = () => {};
+
+        const input = [
+            { name: 'fresh', type: 'ss', server: 'fresh.example', port: 1 },
+            { name: 'stale', type: 'ss', server: 'stale.example', port: 2 },
+            { name: 'never', type: 'ss', server: 'never.example', port: 3 },
+        ];
+
+        // First run to get cacheIds for fresh and stale.
+        await runOptimized(
+            [clone(input[0]), clone(input[1])],
+            { keep_last: true },
+            env,
+        );
+        const keys = Object.keys(lastGoodStore);
+        expect(keys).to.have.length(2);
+        // Make input[0] newer than input[1].
+        lastGoodStore[keys[0]].savedAt = 2_000_000;
+        lastGoodStore[keys[1]].savedAt = 1_000_000;
+        probeOrder.length = 0;
+
+        const out = await runOptimized(
+            clone(input),
+            { keep_last: true, prioritize_stale: true, concurrency: 1 },
+            env,
+        );
+        // Probe order: never (0) -> stale (1_000_000) -> fresh (2_000_000).
+        expect(probeOrder).to.deep.equal([
+            'NODE never',
+            'NODE stale',
+            'NODE fresh',
+        ]);
+        // Output order stays identical to input order!
+        expect(out.map((p) => p.name)).to.deep.equal([
+            '美国 ISP - fresh',
+            '美国 ISP - stale',
+            '美国 ISP - never',
+        ]);
+    });
 });

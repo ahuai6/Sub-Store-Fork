@@ -189,7 +189,7 @@ describe('per-key cache shards', function () {
         expect(store).to.deep.equal({ '#lazy': '{}' });
     });
 
-    it('persists only once when cold-start get() encounters an expired sharded entry', function () {
+    it('incrementally deletes an expired sharded entry on cold-start get() in O(1)', function () {
         const { store, io } = storage();
         let now = 1_700_000_000_000;
         const writer = new BoundedCache({
@@ -207,11 +207,15 @@ describe('per-key cache shards', function () {
         );
 
         let manifestWrites = 0;
+        const readKeys = [];
         const reader = new BoundedCache({
             storeKey: '#expired-once',
             sharded: true,
             resolveTtl: () => 1000,
-            read: io.read,
+            read(key) {
+                readKeys.push(key);
+                return io.read(key);
+            },
             write(value, key) {
                 if (key === '#expired-once') manifestWrites += 1;
                 return io.write(value, key);
@@ -219,9 +223,120 @@ describe('per-key cache shards', function () {
         });
         reader.now = () => now + 2000;
         expect(reader.get('k-0')).to.equal(null);
-        // Single save({}) path: staging + final '{}' (2 manifest writes), not double save (4).
-        expect(manifestWrites).to.equal(2);
+        // Only reads the manifest + k-0 shard (never touches k-1..k-3) and updates manifest once.
+        expect(readKeys).to.have.length(2);
+        expect(manifestWrites).to.equal(1);
+        expect(JSON.parse(store['#expired-once']).keys).to.have.length(3);
+
+        reader.revokeAll();
         expect(store).to.deep.equal({ '#expired-once': '{}' });
+    });
+
+    it('writes a single shard incrementally on cold-start set() without loading unrelated shards', function () {
+        const { store, io } = storage();
+        const seed = new BoundedCache({
+            storeKey: '#inc-write',
+            sharded: true,
+            resolveTtl: () => 60000,
+            ...io,
+        });
+        for (let i = 0; i < 5; i += 1) {
+            expect(seed.set(`k-${i}`, 'v'.repeat(25000))).to.equal(true);
+        }
+        expect(JSON.parse(store['#inc-write']).cacheShardsVersion).to.equal(1);
+
+        const reads = [];
+        const writes = [];
+        const cold = new BoundedCache({
+            storeKey: '#inc-write',
+            sharded: true,
+            resolveTtl: () => 60000,
+            read(key) {
+                reads.push(key);
+                return io.read(key);
+            },
+            write(value, key) {
+                writes.push(key);
+                return io.write(value, key);
+            },
+        });
+        // Overwriting an existing key skips manifest rewrite completely and reads only the manifest.
+        expect(cold.set('k-2', 'u'.repeat(25000))).to.equal(true);
+        expect(reads).to.deep.equal(['#inc-write']);
+        expect(writes).to.have.length(1);
+        expect(writes[0]).to.include(':v1:');
+
+        // Adding a new key stages the manifest first, then writes only the new shard (never reads k-0..k-4).
+        reads.length = 0;
+        writes.length = 0;
+        expect(cold.set('k-new', 'n'.repeat(25000))).to.equal(true);
+        expect(reads).to.deep.equal([]);
+        expect(writes).to.have.length(2);
+        expect(writes[0]).to.equal('#inc-write');
+        expect(writes[1]).to.include(':v1:');
+
+        const verify = new BoundedCache({
+            storeKey: '#inc-write',
+            sharded: true,
+            resolveTtl: () => 60000,
+            ...io,
+        });
+        expect(verify.get('k-2')).to.equal('u'.repeat(25000));
+        expect(verify.get('k-new')).to.equal('n'.repeat(25000));
+        expect(verify.get('k-0')).to.equal('v'.repeat(25000));
+    });
+
+    it('shards #sub-store-cached-resource lazily and drops all shards on revokeAll', function () {
+        const $ = require('@/core/app').default;
+        const resourceCache = require('@/utils/resource-cache').default;
+        const { RESOURCE_CACHE_KEY, SETTINGS_KEY } = require('@/constants');
+        const originalRead = $.read.bind($);
+        const originalWrite = $.write.bind($);
+        const backing = { [SETTINGS_KEY]: { resourceCacheTtl: 3600 } };
+        const readKeys = [];
+        $.read = (key) => {
+            readKeys.push(key);
+            return backing[key];
+        };
+        $.write = (val, key) => {
+            if (val === null) delete backing[key];
+            else backing[key] = val;
+            return true;
+        };
+        try {
+            resourceCache.revokeAll();
+            for (let i = 0; i < 4; i += 1) {
+                resourceCache.set(`res-${i}`, 'r'.repeat(25000));
+            }
+            const manifest = JSON.parse(backing[RESOURCE_CACHE_KEY]);
+            expect(manifest.cacheShardsVersion).to.equal(1);
+            expect(manifest.keys).to.have.length(4);
+
+            // Simulate cold start on the singleton
+            resourceCache._loaded = false;
+            resourceCache._resourceCache = {};
+            resourceCache.shards = new CacheShards(RESOURCE_CACHE_KEY);
+            readKeys.length = 0;
+
+            expect(resourceCache.get('res-1')).to.equal('r'.repeat(25000));
+            // Reads settings + manifest + single shard only.
+            const shardReads = readKeys.filter((k) =>
+                String(k).includes(':v1:'),
+            );
+            expect(shardReads).to.have.length(1);
+
+            resourceCache.revokeAll();
+            expect(backing[RESOURCE_CACHE_KEY]).to.equal('{}');
+            expect(
+                Object.keys(backing).filter((k) => k.includes(':v1:')),
+            ).to.deep.equal([]);
+        } finally {
+            $.read = originalRead;
+            $.write = originalWrite;
+            resourceCache._loaded = false;
+            resourceCache._resourceCache = {};
+            resourceCache.shards = new CacheShards(RESOURCE_CACHE_KEY);
+        }
     });
 
     it('keeps _keySet consistent when a shard write fails mid-save', function () {

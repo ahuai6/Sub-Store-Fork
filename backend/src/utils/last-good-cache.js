@@ -20,9 +20,10 @@ export class LastGoodCache {
             read: io.read,
             write: io.write,
         });
-        this._batch = new BatchFlush(() => this.shards.save(this._entries));
+        this._batch = new BatchFlush(() => this._persist());
         this._loaded = false;
         this._entries = {};
+        this._dirty = new Set();
     }
 
     get entries() {
@@ -33,17 +34,50 @@ export class LastGoodCache {
     set entries(value) {
         this._loaded = true;
         this._entries = value;
+        this._dirty.clear();
     }
 
     _ensureLoaded() {
         if (this._loaded) return;
         this._loaded = true;
-        this._entries = this.shards.load();
+        const loaded = this.shards.load();
+        for (const id of this._dirty) {
+            if (Object.prototype.hasOwnProperty.call(this._entries, id)) {
+                loaded[id] = this._entries[id];
+            }
+        }
+        this._dirty.clear();
+        this._entries = loaded;
+    }
+
+    _persist() {
+        if (!this._loaded) {
+            const dirtyMap = {};
+            for (const id of this._dirty) {
+                if (Object.prototype.hasOwnProperty.call(this._entries, id)) {
+                    dirtyMap[id] = this._entries[id];
+                }
+            }
+            if (Object.keys(dirtyMap).length > 0) {
+                const res = this.shards.writeEntries(dirtyMap);
+                if (res !== null) {
+                    if (res !== false) this._dirty.clear();
+                    return;
+                }
+            } else {
+                return;
+            }
+            this._ensureLoaded();
+        }
+        this._dirty.clear();
+        this.shards.save(this._entries);
     }
 
     get(id) {
         const entry = !this._loaded
-            ? this.shards.readEntry(id)
+            ? Object.prototype.hasOwnProperty.call(this._entries, id)
+                ? this._entries[id]
+                : this.shards.readEntry(id)
             : this._entries[id];
         if (
             !entry ||
@@ -63,6 +97,12 @@ export class LastGoodCache {
         };
         if (!Number.isFinite(entry.savedAt)) return false;
         if (jsonBytes([id, entry]) > SHARD_BYTES) return false;
+        if (!this._loaded && this.shards.isSharded()) {
+            this._entries[id] = entry;
+            this._dirty.add(id);
+            this._batch.schedule();
+            return true;
+        }
         this._ensureLoaded();
         this._entries[id] = entry;
         this._batch.schedule();
@@ -70,6 +110,7 @@ export class LastGoodCache {
     }
 
     revokeAll() {
+        this._dirty.clear();
         if (!this._loaded) {
             this._batch.reset();
             this._entries = {};
@@ -87,7 +128,7 @@ export class LastGoodCache {
 
     _writeThrough() {
         this._batch.reset();
-        this.shards.save(this._entries);
+        this._persist();
     }
 }
 

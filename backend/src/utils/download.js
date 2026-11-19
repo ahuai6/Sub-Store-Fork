@@ -70,11 +70,29 @@ function maskDownloadUrl(url) {
     return maskAgeSecretInUrl(url);
 }
 
-async function finalizeDownloadedBody(body, { ageSecretKey, preprocess, url }) {
+async function finalizeDownloadedBody(
+    body,
+    {
+        ageSecretKey,
+        preprocess,
+        validateProxies = true,
+        deferPreprocess = false,
+        url,
+    },
+) {
     let result = ageSecretKey
         ? await decryptArmorIfPresent(body, ageSecretKey)
         : body;
     const raw = result;
+
+    if (preprocess && deferPreprocess) {
+        return {
+            result,
+            raw,
+            proxies: null,
+            shouldCache: true,
+        };
+    }
 
     if (preprocess) {
         try {
@@ -86,13 +104,15 @@ async function finalizeDownloadedBody(body, { ageSecretKey, preprocess, url }) {
         }
     }
 
-    if (preprocess) {
+    let proxies = null;
+    if (preprocess && validateProxies) {
         try {
-            const proxies = ProxyUtils.parse(result);
+            proxies = ProxyUtils.parse(result);
             if (!Array.isArray(proxies) || proxies.length === 0) {
                 return {
                     result,
                     raw,
+                    proxies: null,
                     shouldCache: false,
                     cacheReason: `URL ${url} 不包含有效节点, 不缓存`,
                 };
@@ -101,6 +121,7 @@ async function finalizeDownloadedBody(body, { ageSecretKey, preprocess, url }) {
             return {
                 result,
                 raw,
+                proxies: null,
                 shouldCache: false,
                 cacheReason: `URL ${url} 尝试解析节点失败 ${
                     e.message ?? e
@@ -112,18 +133,45 @@ async function finalizeDownloadedBody(body, { ageSecretKey, preprocess, url }) {
     return {
         result,
         raw,
+        proxies,
         shouldCache: true,
     };
 }
 
-function formatDownloadResult(finalized, returnRaw) {
-    return returnRaw
-        ? { result: finalized.result, raw: finalized.raw }
-        : finalized.result;
+function formatDownloadResult(finalized, returnRawOrOptions) {
+    const returnRaw =
+        typeof returnRawOrOptions === 'boolean'
+            ? returnRawOrOptions
+            : Boolean(returnRawOrOptions?.returnRaw);
+    const returnParsed =
+        typeof returnRawOrOptions === 'object' &&
+        Boolean(returnRawOrOptions?.returnParsed);
+    if (returnRaw || returnParsed) {
+        const out = { result: finalized.result, raw: finalized.raw };
+        if (returnParsed) {
+            out.proxies = finalized.proxies ?? null;
+        }
+        return out;
+    }
+    return finalized.result;
 }
 
-function formatPlainDownloadResult(result, returnRaw) {
-    return returnRaw ? { result, raw: result } : result;
+function formatPlainDownloadResult(result, returnRawOrOptions) {
+    const returnRaw =
+        typeof returnRawOrOptions === 'boolean'
+            ? returnRawOrOptions
+            : Boolean(returnRawOrOptions?.returnRaw);
+    const returnParsed =
+        typeof returnRawOrOptions === 'object' &&
+        Boolean(returnRawOrOptions?.returnParsed);
+    if (returnRaw || returnParsed) {
+        const out = { result, raw: result };
+        if (returnParsed) {
+            out.proxies = null;
+        }
+        return out;
+    }
+    return result;
 }
 
 export default async function download(
@@ -163,6 +211,13 @@ export default async function download(
             : undefined;
     const returnRaw =
         options && typeof options === 'object' && options.returnRaw;
+    const returnParsed =
+        options && typeof options === 'object' && Boolean(options.returnParsed);
+    const deferPreprocess =
+        options &&
+        typeof options === 'object' &&
+        Boolean(options.deferPreprocess);
+    const formatOptions = { returnRaw, returnParsed };
     const ageSecretKey = explicitAgeSecretKey || $arguments?.[AGE_SECRET_KEY];
     const { isNode, isStash, isLoon, isShadowRocket, isQX } = ENV();
     const {
@@ -170,6 +225,7 @@ export default async function download(
         githubProxyRegex,
         defaultProxy,
         defaultUserAgent,
+        defaultFlowUserAgent,
         defaultTimeout,
         cacheThreshold: defaultCacheThreshold,
     } = $.read(SETTINGS_KEY) || {};
@@ -203,6 +259,7 @@ export default async function download(
     }
 
     const requestTimeout = timeout || defaultTimeout || 8000;
+    const originalUrl = url;
     url = maybePrefixGithubProxyUrl(url, githubProxy, githubProxyRegex);
     const safeUrl = maskDownloadUrl(url);
     const id = hex_md5(
@@ -229,9 +286,11 @@ export default async function download(
                 await finalizeDownloadedBody(cached, {
                     ageSecretKey,
                     preprocess,
+                    validateProxies: false,
+                    deferPreprocess,
                     url: safeUrl,
                 }),
-                returnRaw,
+                formatOptions,
             );
         }
         if (customCached) {
@@ -284,9 +343,11 @@ export default async function download(
                 await finalizeDownloadedBody(customCached, {
                     ageSecretKey,
                     preprocess,
+                    validateProxies: false,
+                    deferPreprocess,
                     url: safeUrl,
                 }),
-                returnRaw,
+                formatOptions,
             );
         }
     }
@@ -310,7 +371,7 @@ export default async function download(
             }
 
             if (type === 'module') {
-                return formatPlainDownloadResult(item.content, returnRaw);
+                return formatPlainDownloadResult(item.content, formatOptions);
             } else {
                 return formatPlainDownloadResult(
                     await produceArtifact({
@@ -318,7 +379,7 @@ export default async function download(
                         name,
                         noFlow: options?.noFlow,
                     }),
-                    returnRaw,
+                    formatOptions,
                 );
             }
         } catch (err) {
@@ -335,7 +396,7 @@ export default async function download(
             const fs = getFs();
             return formatPlainDownloadResult(
                 fs.readFileSync(url.split('#')[0], 'utf8'),
-                returnRaw,
+                formatOptions,
             );
         } catch (err) {
             $.error(
@@ -353,9 +414,11 @@ export default async function download(
             await finalizeDownloadedBody(await tasks.get(id), {
                 ageSecretKey,
                 preprocess,
+                validateProxies: false,
+                deferPreprocess,
                 url: safeUrl,
             }),
-            returnRaw,
+            formatOptions,
         );
     }
 
@@ -385,6 +448,8 @@ export default async function download(
         result = await finalizeDownloadedBody(cached, {
             ageSecretKey,
             preprocess,
+            validateProxies: false,
+            deferPreprocess,
             url: safeUrl,
         });
         if (customCacheKey) {
@@ -425,13 +490,29 @@ export default async function download(
             if (headers) {
                 const flowInfo = getFlowField(headers);
                 if (flowInfo) {
-                    headersResourceCache.set(
-                        id,
-                        flowInfo,
-                        $arguments?.headersCacheTtl
-                            ? $arguments?.headersCacheTtl * 1000
-                            : undefined,
-                    );
+                    const flowTtl = $arguments?.headersCacheTtl
+                        ? $arguments?.headersCacheTtl * 1000
+                        : undefined;
+                    headersResourceCache.set(id, flowInfo, flowTtl);
+                    if (
+                        !customHeaders &&
+                        !$arguments?.flowUserAgent &&
+                        !$arguments?.flowUrl &&
+                        !$arguments?.flowHeaders
+                    ) {
+                        const flowUserAgent =
+                            defaultFlowUserAgent || 'clash.meta/v1.19.23';
+                        const defaultFlowId = hex_md5(
+                            `${flowUserAgent}${originalUrl}`,
+                        );
+                        if (defaultFlowId !== id) {
+                            headersResourceCache.set(
+                                defaultFlowId,
+                                flowInfo,
+                                flowTtl,
+                            );
+                        }
+                    }
                 }
             }
             if (body.replace(/\s/g, '').length === 0)
@@ -439,6 +520,8 @@ export default async function download(
             result = await finalizeDownloadedBody(body, {
                 ageSecretKey,
                 preprocess,
+                validateProxies: true,
+                deferPreprocess: false,
                 url: safeUrl,
             });
             let shouldCache = true;
@@ -487,9 +570,11 @@ export default async function download(
                         await finalizeDownloadedBody(cached, {
                             ageSecretKey,
                             preprocess,
+                            validateProxies: false,
+                            deferPreprocess,
                             url: safeUrl,
                         }),
-                        returnRaw,
+                        formatOptions,
                     );
                 }
             }
@@ -519,7 +604,7 @@ export default async function download(
     if (!isNode) {
         tasks.set(id, rawResult);
     }
-    return formatDownloadResult(result, returnRaw);
+    return formatDownloadResult(result, formatOptions);
 }
 
 export async function downloadFile(url, file) {

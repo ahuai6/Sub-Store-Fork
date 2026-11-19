@@ -63,6 +63,8 @@
  * - [keep_last] 失败、超时或时间预算跳过时, 沿用该节点上次成功结果. 默认关闭
  * - [keep_last_max_age] 上次成功结果的最长可用时间. 默认不限制.
  *   纯数字单位为毫秒, 与 timeout/time_budget 相同; 也可写 3600s、24h、7d
+ * - [prioritize_stale] 配合 keep_last 使用: 优先探测从未成功或上次成功最早的未命中缓存节点,
+ *   不改变最终输出顺序. 默认关闭
  */
 
 async function operator(proxies = [], targetPlatform, context) {
@@ -98,6 +100,7 @@ async function operator(proxies = [], targetPlatform, context) {
   const targetDedup = enabled($arguments.dedup_target)
   const keepLast = enabled($arguments.keep_last)
   const keepLastMaxAge = parseMaxAge($arguments.keep_last_max_age)
+  const prioritizeStale = enabled($arguments.prioritize_stale)
   const requests = new Map() // pending promises only, scoped to this invocation
   const reachabilityUrl = $arguments.reachability_url || 'http://www.gstatic.com/generate_204'
   const reachabilityTimeout = Math.min(5000, positive($arguments.reachability_timeout, 1500))
@@ -131,23 +134,110 @@ async function operator(proxies = [], targetPlatform, context) {
   const CACHE_FLUSH_INTERVAL_MS = 15000
   const pending = []
   const lastPending = []
-  let lastPendingFlushAt = Date.now()
-  let lastGoodFlushAt = Date.now()
-  const started = keepLast ? new Set() : null
+  const runStartedAt = Date.now()
+  let lastPendingFlushAt = runStartedAt
+  let lastGoodFlushAt = runStartedAt
+  const started = new Set()
+  const stats = {
+    total: proxies.length,
+    cache: 0,
+    shared: 0,
+    ok: 0,
+    failed: 0,
+    keepLast: 0,
+    budgetSkipped: 0,
+    incompatible: 0,
+  }
 
   try {
+    const workItems = []
+    if (cacheEnabled) {
+      // Fast synchronous pre-pass: satisfy cached and shared-check hits first
+      // so time_budget is spent exclusively on uncached network probes.
+      for (let order = 0; order < proxies.length; order++) {
+        const proxy = proxies[order]
+        const id = cacheId(proxy)
+        let node
+        try {
+          node = produceNode(proxy)
+        } catch (e) {
+          $.error(`[${proxy.name}] ${e.message ?? e}`)
+          started.add(proxy)
+          stats.failed++
+          if (keepLast && applyLastGood(proxy, id)) stats.keepLast++
+          continue
+        }
+        if (!node) {
+          proxy._incompatible = true
+          started.add(proxy)
+          stats.incompatible++
+          continue
+        }
+        let cached = cache.get(id)
+        let fromShared = false
+        if (!cached && typeof cache.sharedCheckGet === 'function') {
+          try {
+            cached = cache.sharedCheckGet(sharedIdentity(proxy))
+            if (cached) fromShared = true
+          } catch (e) {
+            cached = null
+          }
+        }
+        if (cached) {
+          if (cached.api) {
+            $.info(`[${proxy.name}] 使用成功缓存`)
+            $.log(`[${proxy.name}] api: ${JSON.stringify(cached.api, null, 2)}`)
+            proxy.name = formatNode({ proxy, api: cached.api })
+            proxy._geo = cached.api
+            started.add(proxy)
+            if (fromShared) stats.shared++
+            else stats.cache++
+            continue
+          } else if (disableFailedCache) {
+            $.info(`[${proxy.name}] 不使用失败缓存`)
+          } else {
+            $.info(`[${proxy.name}] 使用失败缓存`)
+            started.add(proxy)
+            if (fromShared) stats.shared++
+            else stats.cache++
+            if (keepLast && applyLastGood(proxy, id)) stats.keepLast++
+            continue
+          }
+        }
+        workItems.push({ proxy, node, id, order })
+      }
+    } else {
+      for (let order = 0; order < proxies.length; order++) {
+        const proxy = proxies[order]
+        const id = keepLast ? cacheId(proxy) : undefined
+        workItems.push({ proxy, node: undefined, id, order })
+      }
+    }
+
+    if (prioritizeStale && keepLast && workItems.length > 1) {
+      // Probe never-succeeded and oldest-refreshed nodes first without
+      // changing the order of the returned proxies array.
+      const staleness = new Map()
+      for (const item of workItems) {
+        const stored = readLast(item.id)
+        staleness.set(item, stored ? Number(stored.savedAt) || 0 : 0)
+      }
+      workItems.sort((a, b) => staleness.get(a) - staleness.get(b) || a.order - b.order)
+    }
+
     await executeAsyncTasks(
-      proxies.map(proxy => () => check(proxy)),
+      workItems.map(item => () => check(item.proxy, item.node, item.id)),
       { concurrency }
     )
 
-    if (started) {
-      for (const proxy of proxies) {
-        if (!started.has(proxy)) {
+    for (const item of workItems) {
+      if (!started.has(item.proxy)) {
+        stats.budgetSkipped++
+        if (keepLast) {
           try {
-            applyLastGood(proxy, cacheId(proxy))
+            if (applyLastGood(item.proxy, item.id)) stats.keepLast++
           } catch (e) {
-            $.error(`[${proxy.name}] ${e.message ?? e}`)
+            $.error(`[${item.proxy.name}] ${e.message ?? e}`)
           }
         }
       }
@@ -180,6 +270,22 @@ async function operator(proxies = [], targetPlatform, context) {
   } finally {
     flushPending()
     flushLast()
+    $.info(
+      `[geo] total=${stats.total} cache=${stats.cache} shared=${stats.shared} ok=${stats.ok} failed=${stats.failed} keepLast=${stats.keepLast} budgetSkipped=${stats.budgetSkipped} incompatible=${stats.incompatible} elapsed=${Date.now() - runStartedAt}ms`
+    )
+  }
+
+  function produceNode(proxy) {
+    if (isEgern && !surge_http_api_enabled) {
+      return JSON.stringify(
+        ProxyUtils.produce([proxy], target, 'internal', {
+          'include-unsupported-proxy': includeUnsupportedProxy,
+        })[0]
+      )
+    }
+    return ProxyUtils.produce([proxy], surge_http_api_enabled ? 'Surge' : target, undefined, {
+      'include-unsupported-proxy': includeUnsupportedProxy,
+    })
   }
 
   function sharedIdentity(proxy) {
@@ -197,28 +303,19 @@ async function operator(proxies = [], targetPlatform, context) {
     }
   }
 
-  async function check(proxy) {
-    if (started) started.add(proxy)
-    const id = cacheEnabled || keepLast ? cacheId(proxy) : undefined
+  async function check(proxy, preproducedNode, precomputedId) {
+    started.add(proxy)
+    const id = precomputedId !== undefined ? precomputedId : (cacheEnabled || keepLast ? cacheId(proxy) : undefined)
     let finishShared = null
     try {
-      let node
-      if (isEgern && !surge_http_api_enabled) {
-        node = JSON.stringify(
-          ProxyUtils.produce([proxy], target, 'internal', {
-            'include-unsupported-proxy': includeUnsupportedProxy,
-          })[0]
-        )
-      } else {
-        node = ProxyUtils.produce([proxy], surge_http_api_enabled ? 'Surge' : target, undefined, {
-          'include-unsupported-proxy': includeUnsupportedProxy,
-        })
-      }
+      const node = preproducedNode !== undefined ? preproducedNode : produceNode(proxy)
       if (node) {
         let cached = cache.get(cacheEnabled ? id : undefined)
+        let fromShared = false
         if (cacheEnabled && !cached && typeof cache.sharedCheckGet === 'function') {
           try {
             cached = cache.sharedCheckGet(sharedIdentity(proxy))
+            if (cached) fromShared = true
           } catch (e) {
             cached = null
           }
@@ -232,10 +329,14 @@ async function operator(proxies = [], targetPlatform, context) {
           const claim = cache.sharedCheckClaim(sharedIdentity(proxy))
           if (claim.cached && (claim.cached.api || !disableFailedCache)) {
             cached = claim.cached
+            fromShared = true
           } else if (claim.pending) {
             try {
               const shared = await claim.pending
-              if (shared && (shared.api || !disableFailedCache)) cached = shared
+              if (shared && (shared.api || !disableFailedCache)) {
+                cached = shared
+                fromShared = true
+              }
             } catch (e) {}
           } else if (typeof claim.finish === 'function') {
             finishShared = claim.finish
@@ -247,12 +348,16 @@ async function operator(proxies = [], targetPlatform, context) {
             $.log(`[${proxy.name}] api: ${JSON.stringify(cached.api, null, 2)}`)
             proxy.name = formatNode({ proxy, api: cached.api })
             proxy._geo = cached.api
+            if (fromShared) stats.shared++
+            else stats.cache++
             return
           } else if (disableFailedCache) {
             $.info(`[${proxy.name}] 不使用失败缓存`)
           } else {
             $.info(`[${proxy.name}] 使用失败缓存`)
-            if (keepLast) applyLastGood(proxy, id)
+            if (fromShared) stats.shared++
+            else stats.cache++
+            if (keepLast && applyLastGood(proxy, id)) stats.keepLast++
             return
           }
         }
@@ -300,6 +405,7 @@ async function operator(proxies = [], targetPlatform, context) {
         if (status == 200) {
           proxy.name = formatNode({ proxy, api })
           proxy._geo = api
+          stats.ok++
           if (cacheEnabled) {
             $.info(`[${proxy.name}] 设置成功缓存`)
             remember(id, { api }, proxy, finishShared)
@@ -307,23 +413,27 @@ async function operator(proxies = [], targetPlatform, context) {
           }
           rememberLast(id, api)
         } else {
+          stats.failed++
           if (cacheEnabled) {
             $.info(`[${proxy.name}] 设置失败缓存`)
             remember(id, {}, proxy, finishShared)
             finishShared = null
           }
-          if (keepLast) applyLastGood(proxy, id)
+          if (keepLast && applyLastGood(proxy, id)) stats.keepLast++
         }
       } else {
         proxy._incompatible = true
+        stats.incompatible++
       }
     } catch (e) {
       $.error(`[${proxy.name}] ${e.message ?? e}`)
       if (e.budgetExceeded) {
+        stats.budgetSkipped++
         if (finishShared) finishShared(null)
-        if (keepLast) applyLastGood(proxy, id)
+        if (keepLast && applyLastGood(proxy, id)) stats.keepLast++
         return
       }
+      stats.failed++
       if (cacheEnabled) {
         $.info(`[${proxy.name}] 设置失败缓存`)
         remember(id, {}, proxy, finishShared)
@@ -334,7 +444,7 @@ async function operator(proxies = [], targetPlatform, context) {
         } catch (err) {}
         finishShared = null
       }
-      if (keepLast) applyLastGood(proxy, id)
+      if (keepLast && applyLastGood(proxy, id)) stats.keepLast++
     }
   }
 
