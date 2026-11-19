@@ -50,13 +50,14 @@ class ResourceCache {
 
     _cleanup(prefix, ttl) {
         this._ensureLoaded();
+        if (!(getTTL() > 0)) return;
         const resolvedTTL = normalizeTTL(ttl) ?? 0;
         let clear = false;
         const now = Date.now();
         Object.entries(this._resourceCache).forEach((entry) => {
             const [id, cached] = entry;
-            const shouldDelete =
-                !cached?.time || cached.time <= now + resolvedTTL;
+            const expiry = effectiveExpiry(cached);
+            const shouldDelete = !expiry || expiry <= now + resolvedTTL;
             if (shouldDelete && (prefix ? id.startsWith(prefix) : true)) {
                 delete this._resourceCache[id];
                 clear = true;

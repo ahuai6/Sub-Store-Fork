@@ -837,7 +837,11 @@ describe('optimized geo.js', function () {
                 .createHash('md5')
                 .update(
                     `geo:http://ip-api.com/json?lang=zh-CN:{{proxy.server.toUpperCase()}}:undefined:undefined:${JSON.stringify(
-                        node,
+                        Object.fromEntries(
+                            Object.entries(node).sort(([a], [b]) =>
+                                a.localeCompare(b),
+                            ),
+                        ),
                     )}`,
                 )
                 .digest('hex')}`;
@@ -859,5 +863,115 @@ describe('optimized geo.js', function () {
         expect(output[1].name).to.equal('bad-fmt');
         expect(output[2].name).to.equal('G.EXAMPLE');
         expect(output[2]._geo).to.deep.equal({ country: 'SG' });
+    });
+
+    it('keeps keep_last and cache keys stable across key order and display name changes', async function () {
+        let shouldFail = false;
+        const env = createEnv({
+            bodyFor() {
+                if (shouldFail) return { status: 500, body: '{}' };
+                return {
+                    status: 200,
+                    body: JSON.stringify({ country: '新加坡', isp: 'ISP' }),
+                };
+            },
+        });
+        wireLastGood(env);
+
+        const first = await runOptimized(
+            [
+                {
+                    name: 'n1',
+                    type: 'ss',
+                    server: 'sg.example',
+                    port: 443,
+                    subDisplayName: 'Sub A',
+                    collectionDisplayName: 'Col A',
+                },
+            ],
+            { keep_last: true, geo: true, retries: 0 },
+            env,
+        );
+        expect(first[0].name).to.equal('新加坡 ISP - n1');
+
+        shouldFail = true;
+        const reordered = await runOptimized(
+            [
+                {
+                    port: 443,
+                    server: 'sg.example',
+                    type: 'ss',
+                    name: 'n1',
+                    subDisplayName: 'Sub Renamed',
+                    collectionDisplayName: 'Col Renamed',
+                },
+            ],
+            { keep_last: true, geo: true, retries: 0 },
+            env,
+        );
+        expect(reordered[0].name).to.equal('新加坡 ISP - n1');
+        expect(reordered[0]._geo).to.deep.equal({
+            country: '新加坡',
+            isp: 'ISP',
+        });
+    });
+
+    it('uses the configured HTTP method when calling surge_http_api', async function () {
+        const posted = [];
+        const env = createEnv();
+        env.$.http.post = async (opt) => {
+            posted.push(opt);
+            return {
+                status: 200,
+                body: JSON.stringify({
+                    result: {
+                        response: { status: 200 },
+                        data: JSON.stringify({ country: '日本', isp: 'ISP' }),
+                    },
+                }),
+            };
+        };
+
+        const out = await runOptimized(
+            [{ name: 'n1', type: 'ss', server: 'jp.example', port: 443 }],
+            {
+                surge_http_api: '127.0.0.1:6171',
+                surge_http_api_key: 'secret',
+                method: 'post',
+                geo: true,
+            },
+            env,
+        );
+        expect(out[0].name).to.equal('日本 ISP - n1');
+        expect(posted).to.have.length(1);
+        const evalPayload = JSON.parse(posted[0].body);
+        expect(evalPayload.script_text).to.include('$httpClient["post"](');
+    });
+
+    it('checkpoints small pending cache batches once the flush interval elapses', async function () {
+        realNow = Date.now;
+        let now = 1_700_000_000_000;
+        Date.now = () => now;
+        const env = createEnv({
+            deferPersist: true,
+            bodyFor(node) {
+                if (node.includes('n2')) now += 16000;
+                return {
+                    status: 200,
+                    body: JSON.stringify({ country: '日本', isp: 'ISP' }),
+                };
+            },
+        });
+        await runOptimized(
+            [
+                { name: 'n1', type: 'ss', server: 'a.example', port: 1 },
+                { name: 'n2', type: 'ss', server: 'b.example', port: 2 },
+                { name: 'n3', type: 'ss', server: 'c.example', port: 3 },
+            ],
+            { cache: true, concurrency: 1 },
+            env,
+        );
+        // Checkpoint flushed at n2 (16s elapsed), plus final flush for n3.
+        expect(env.cache.persists.length).to.be.at.least(2);
     });
 });

@@ -91,10 +91,13 @@ function pemToBytes(caStr) {
     if (typeof caStr !== 'string' || caStr.indexOf('-----BEGIN ') === -1) {
         throw new Error("can't find PEM header");
     }
-    const stripped = caStr
-        .replace(/^[^]*-----BEGIN [^-]+-----/, '')
-        .replace(/-----END [^-]+-----[^]*$/, '')
-        .replace(/[^0-9A-Za-z+/=]+/g, '');
+    const match = caStr.match(
+        /-----BEGIN ([^-\r\n]+)-----([\s\S]*?)-----END \1-----/,
+    );
+    if (!match) {
+        throw new Error("can't find PEM footer");
+    }
+    const stripped = match[2].replace(/[^0-9A-Za-z+/=]+/g, '');
     const eq = stripped.indexOf('=');
     const body = eq === -1 ? stripped : stripped.slice(0, eq);
     return Base64.toUint8Array(body);

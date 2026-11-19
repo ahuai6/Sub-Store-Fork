@@ -380,5 +380,59 @@ describe('Surge subscription save', function () {
         expect(nodeContext.__batch.timer).to.not.equal(null);
         nodeContext.__batch.flush();
         expect(nodeContext.__flushed).to.equal(1);
+
+        // Surge BatchFlush checkpoints synchronously once flushIntervalMs passes, still without arming a timer.
+        let now = 1_700_000_000_000;
+        context.__batch.now = () => now;
+        context.__batch.reset();
+        context.__batch.schedule();
+        expect(context.__batch.timer).to.equal(null);
+        expect(context.__flushed).to.equal(1);
+        now += 15000;
+        context.__batch.schedule();
+        expect(context.__batch.timer).to.equal(null);
+        expect(context.__flushed).to.equal(2);
+    });
+
+    it('syncs in-memory cache and runs migration when restoring storage on Surge', async function () {
+        const subs = makeSubs('before');
+        const seeded = seedStore(subs, { complete: true });
+        const legacyBackup = {
+            settings: { defaultTimeout: 5000 },
+            subs: {
+                restored: {
+                    name: 'restored',
+                    'display-name': 'Restored Legacy',
+                    url: 'https://example.com/sub',
+                    process: [],
+                },
+            },
+            collections: {},
+            artifacts: {},
+            rules: {},
+            files: {},
+            tokens: {},
+        };
+
+        const run = await runBundle(simpleCode, {
+            request: {
+                method: 'POST',
+                url: 'http://sub.store/api/storage',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: JSON.stringify(legacyBackup) }),
+            },
+            store: seeded.store,
+        });
+
+        expect(run.doneCalls).to.have.length(1);
+        expect(run.doneCalls[0].response.status).to.equal(200);
+        const rawStored = seeded.backing['sub-store'];
+        expect(rawStored).to.not.include('\n  ');
+        const stored = JSON.parse(rawStored);
+        expect(stored.schemaVersion).to.equal('2.0');
+        expect(Array.isArray(stored.subs)).to.equal(true);
+        expect(stored.subs).to.have.length(1);
+        expect(stored.subs[0].name).to.equal('restored');
+        expect(stored.subs[0].displayName).to.equal('Restored Legacy');
     });
 });

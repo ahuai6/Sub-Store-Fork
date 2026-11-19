@@ -3,7 +3,8 @@ name: sync-upstream
 # Fast-forward the pristine `upstream` branch to sub-store-org/Sub-Store master,
 # mirror new tags, and merge that into `main`. A conflict opens a PR. After a
 # clean merge, the fork frontend redirect and CORS origin are reapplied; if
-# that patch no longer matches, main is not pushed and an issue is opened.
+# that patch no longer matches, main is not pushed and the diagnostic report is
+# written to the Job Summary (repository Issues stay disabled).
 # Publish checks run before main is pushed. A check failure opens a PR on
 # sync/tests-failed. This workflow never force-pushes and never deletes branches.
 #
@@ -18,7 +19,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: write
   actions: write
 
 concurrency:
@@ -165,12 +165,11 @@ jobs:
 
       - name: Report a fork patch that no longer applies
         if: steps.merge.outputs.clean == 'true' && steps.fork.outputs.ok != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          title="sync: fork frontend patch no longer applies"
           {
+            echo "### sync: fork frontend patch no longer applies"
+            echo
             echo "Automatic merge of \`sub-store-org/Sub-Store\` \`master\` into \`main\` was clean, but the fork frontend patch no longer matches. \`main\` was not pushed. Nothing was force-pushed."
             echo
             echo "\`node .github/scripts/apply-fork-frontend.mjs\` or \`node .github/scripts/apply-fork-runtime.mjs --check\` failed:"
@@ -185,13 +184,10 @@ jobs:
             echo "- \`backend/src/utils/cors.js\` keeps \`https://ahuai6.github.io\` on \`NON_NODE_CORS_DEFAULT\`."
             echo
             echo "Upstream commit: \`$(git rev-parse upstream/master)\`"
-          } > /tmp/fork-patch-issue.md
-          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title ${title}" --json number --jq '.[0].number')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/fork-patch-issue.md
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/fork-patch-issue.md
-          fi
+          } > /tmp/fork-patch-report.md
+          cat /tmp/fork-patch-report.md
+          cat /tmp/fork-patch-report.md >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Fork patch no longer applies::Upstream merge was clean, but fork patch verification failed. main was not pushed; see Job Summary."
           exit 1
 
       - name: Refresh the published Surge module
@@ -273,16 +269,24 @@ jobs:
             cat /tmp/fork-checks-tail.txt
             echo '```'
           } > /tmp/sync-tests-body.md
+          {
+            echo "### sync: upstream merge checks failed"
+            echo
+            cat /tmp/sync-tests-body.md
+          } >> "$GITHUB_STEP_SUMMARY"
           existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head sync/tests-failed --state open --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
             gh pr comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/sync-tests-body.md
             exit 0
           fi
           if [ "$pushed" != "true" ]; then
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "sync: upstream merge checks failed" --body-file /tmp/sync-tests-body.md
-            exit 0
+            echo "::error title=sync/tests-failed needs manual attention::Publish checks failed and sync/tests-failed could not fast-forward. See Job Summary."
+            exit 1
           fi
-          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head sync/tests-failed --title "sync: upstream merge checks failed" --body-file /tmp/sync-tests-body.md
+          if ! gh pr create --repo "$GITHUB_REPOSITORY" --base main --head sync/tests-failed --title "sync: upstream merge checks failed" --body-file /tmp/sync-tests-body.md; then
+            echo "::error title=Failed to create sync/tests-failed PR::Publish checks failed and sync/tests-failed was pushed, but PR creation failed. See Job Summary."
+            exit 1
+          fi
 
       - name: Push main
         id: push
@@ -354,6 +358,8 @@ jobs:
           # Do not force this branch if someone already pushed a resolution.
           if [ "${{ steps.merge.outputs.conflicts }}" != "true" ]; then
             {
+              echo "### sync: upstream merge failed before conflicts were recorded"
+              echo
               echo "Automatic merge of \`sub-store-org/Sub-Store\` \`master\` into \`main\` failed before any conflicts were recorded. Nothing was force-pushed, and \`sync/upstream\` was not updated."
               echo
               echo "\`git merge\` output:"
@@ -364,24 +370,32 @@ jobs:
               echo
               echo "Upstream commit: \`$(git rev-parse upstream/master)\`"
             } > /tmp/sync-pr-body.md
-            title="sync: upstream merge failed before conflicts were recorded"
-            existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title ${title}" --json number --jq '.[0].number')
-            if [ -n "$existing" ]; then
-              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/sync-pr-body.md
-            else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/sync-pr-body.md
-            fi
+            cat /tmp/sync-pr-body.md
+            cat /tmp/sync-pr-body.md >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Upstream merge failed before conflicts were recorded::See Job Summary for git merge output."
             exit 1
           fi
           if ! git push origin upstream/master:refs/heads/sync/upstream; then
-            body="Could not update \`sync/upstream\` (it is not a fast-forward). Upstream commit: $(git rev-parse upstream/master). Conflicting files:"$'\n\n```\n'"$(cat /tmp/conflict-files)"$'\n```'$'\n\n'"Keep the fork redirect in \`backend/src/restful/miscs.js\` (\`https://ahuai6.github.io/Sub-Store-Fork/\`) and \`https://ahuai6.github.io\` on \`NON_NODE_CORS_DEFAULT\` in \`backend/src/utils/cors.js\`. \`node .github/scripts/apply-fork-frontend.mjs\` reapplies both when the anchors still match. Nothing was force-pushed."
-            title="sync: upstream merge conflicts need attention"
-            existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title ${title}" --json number --jq '.[0].number')
+            {
+              echo "### sync: upstream merge conflicts need attention"
+              echo
+              echo "Could not update \`sync/upstream\` (it is not a fast-forward). Upstream commit: \`$(git rev-parse upstream/master)\`."
+              echo
+              echo "Conflicting files:"
+              echo
+              echo '```'
+              cat /tmp/conflict-files
+              echo '```'
+              echo
+              echo "Keep the fork redirect in \`backend/src/restful/miscs.js\` (\`https://ahuai6.github.io/Sub-Store-Fork/\`) and \`https://ahuai6.github.io\` on \`NON_NODE_CORS_DEFAULT\` in \`backend/src/utils/cors.js\`. \`node .github/scripts/apply-fork-frontend.mjs\` reapplies both when the anchors still match. Nothing was force-pushed."
+            } > /tmp/sync-conflict-attention.md
+            cat /tmp/sync-conflict-attention.md
+            cat /tmp/sync-conflict-attention.md >> "$GITHUB_STEP_SUMMARY"
+            existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head sync/upstream --state open --json number --jq '.[0].number')
             if [ -n "$existing" ]; then
-              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
-            else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+              gh pr comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/sync-conflict-attention.md
             fi
+            echo "::error title=sync/upstream could not fast-forward::Upstream merge conflicts need manual attention. See Job Summary."
             exit 1
           fi
           {
@@ -406,12 +420,17 @@ jobs:
             echo
             echo "Resolve the conflicts on this PR with a merge commit. Do not squash, rebase, or force-push \`main\` or \`upstream\`."
           } > /tmp/sync-pr-body.md
+          {
+            echo "### sync: resolve upstream merge conflicts"
+            echo
+            cat /tmp/sync-pr-body.md
+          } >> "$GITHUB_STEP_SUMMARY"
           existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head sync/upstream --state open --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
             gh pr comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/sync-pr-body.md
             exit 0
           fi
           if ! gh pr create --repo "$GITHUB_REPOSITORY" --base main --head sync/upstream --title "sync: resolve upstream merge conflicts" --body-file /tmp/sync-pr-body.md; then
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "sync: resolve upstream merge conflicts" --body-file /tmp/sync-pr-body.md
+            echo "::error title=Failed to create sync/upstream PR::Conflict branch sync/upstream was pushed, but PR creation failed. See Job Summary."
             exit 1
           fi

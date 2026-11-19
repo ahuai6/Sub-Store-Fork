@@ -6,11 +6,27 @@
 const MARKER = 'sub-store-fork-api-cap:2';
 const SKIP = 'sub-store-fork-skip-restored-preview';
 
+type CancelTokenLike = {
+  promise?: Promise<unknown>;
+  reason?: unknown;
+  throwIfRequested?: () => void;
+};
+
+type AdapterFn = (config: ForkConfig) => Promise<unknown>;
+
 type ForkConfig = {
   __forkApiSlot?: boolean;
+  __forkAdapterWrapped?: boolean;
+  __forkRelease?: () => void;
+  signal?: AbortSignal;
+  cancelToken?: CancelTokenLike;
+  adapter?: AdapterFn | unknown;
 };
 
 type Queueable = {
+  defaults?: {
+    adapter?: AdapterFn | unknown;
+  };
   interceptors: {
     request: { use: (...args: any[]) => unknown };
     response: { use: (...args: any[]) => unknown };
@@ -58,25 +74,80 @@ export function restoredPreviewError() {
   return Object.assign(error, { code: 'ERR_CANCELED' });
 }
 
-function acquireApiSlot() {
+function canceledError(reason?: unknown) {
+  if (
+    reason instanceof Error ||
+    (reason &&
+      typeof reason === 'object' &&
+      (reason as { __CANCEL__?: boolean }).__CANCEL__)
+  ) {
+    return reason;
+  }
+  const error = new Error(
+    typeof reason === 'string' && reason ? reason : 'canceled',
+  );
+  error.name = 'CanceledError';
+  return Object.assign(error, { code: 'ERR_CANCELED' });
+}
+
+function releaseSlotCount() {
+  activeApiRequests = Math.max(0, activeApiRequests - 1);
+  const next = apiWaiters.shift();
+  if (next) next();
+}
+
+function acquireApiSlot(
+  signal?: AbortSignal,
+  cancelToken?: CancelTokenLike,
+) {
+  if (signal?.aborted) {
+    return Promise.reject(canceledError(signal.reason));
+  }
+  if (cancelToken?.reason) {
+    return Promise.reject(canceledError(cancelToken.reason));
+  }
   if (activeApiRequests < forkApiCap()) {
     activeApiRequests += 1;
     return Promise.resolve();
   }
-  return new Promise<void>((resolve) => {
-    apiWaiters.push(() => {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const grant = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       activeApiRequests += 1;
       resolve();
-    });
+    };
+    const onCancel = (reason?: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const index = apiWaiters.indexOf(grant);
+      if (index !== -1) apiWaiters.splice(index, 1);
+      reject(canceledError(reason));
+    };
+    const onAbort = () => onCancel(signal?.reason);
+    apiWaiters.push(grant);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    cancelToken?.promise?.then(
+      (reason) => onCancel(reason),
+      (reason) => onCancel(reason),
+    );
   });
 }
 
 function releaseApiSlot(config?: ForkConfig) {
+  if (typeof config?.__forkRelease === 'function') {
+    config.__forkRelease();
+    return;
+  }
   if (!config?.__forkApiSlot) return;
   config.__forkApiSlot = false;
-  activeApiRequests = Math.max(0, activeApiRequests - 1);
-  const next = apiWaiters.shift();
-  if (next) next();
+  releaseSlotCount();
 }
 
 function forkApiCap() {
@@ -84,18 +155,56 @@ function forkApiCap() {
   return Number.isInteger(parsed) && parsed >= 1 ? parsed : 2;
 }
 
+function resolveAdapter(config: ForkConfig, service: Queueable): AdapterFn | null {
+  const raw = config.adapter ?? service.defaults?.adapter;
+  return typeof raw === 'function' ? (raw as AdapterFn) : null;
+}
+
 export function installForkApiQueue(service: Queueable) {
-  service.interceptors.request.use(async (config) => {
-    await acquireApiSlot();
+  service.interceptors.request.use(async (config: ForkConfig) => {
+    const baseAdapter = resolveAdapter(config, service);
+    if (baseAdapter) {
+      if (!config.__forkAdapterWrapped) {
+        config.__forkAdapterWrapped = true;
+        config.adapter = async (cfg: ForkConfig) => {
+          await acquireApiSlot(cfg.signal, cfg.cancelToken);
+          let released = false;
+          const release = () => {
+            if (released) return;
+            released = true;
+            releaseSlotCount();
+          };
+          try {
+            return await baseAdapter(cfg);
+          } finally {
+            release();
+          }
+        };
+      }
+      return config;
+    }
+
+    await acquireApiSlot(config.signal, config.cancelToken);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      config.__forkApiSlot = false;
+      config.signal?.removeEventListener('abort', release);
+      releaseSlotCount();
+    };
     config.__forkApiSlot = true;
+    config.__forkRelease = release;
+    config.signal?.addEventListener('abort', release, { once: true });
+    config.cancelToken?.promise?.then(release, release);
     return config;
   });
   service.interceptors.response.use(
-    (response) => {
+    (response: { config?: ForkConfig }) => {
       releaseApiSlot(response?.config);
       return response;
     },
-    (error) => {
+    (error: { config?: ForkConfig }) => {
       releaseApiSlot(error?.config);
       return Promise.reject(error);
     },

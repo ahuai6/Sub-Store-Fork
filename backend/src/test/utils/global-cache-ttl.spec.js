@@ -58,5 +58,16 @@ for (const [label, cache, setting] of [
             Date.now = () => 1700000060000;
             expect(cache.get('entry')).to.equal(null);
         });
+        it('purges entries expired by a shortened global TTL during cleanup', function () {
+            cache.set('stale-entry', 'old');
+            if (typeof cache.flush === 'function') cache.flush();
+            seconds = 5;
+            Date.now = () => 1700000010000;
+            cache._cleanup();
+            expect(cache.resourceCache['stale-entry']).to.equal(undefined);
+            // Re-raising TTL must not resurrect the purged entry.
+            seconds = 600;
+            expect(cache.get('stale-entry')).to.equal(null);
+        });
     });
 }

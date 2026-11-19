@@ -199,13 +199,13 @@ GitHub cron 是 UTC。台北时间是 UTC+8，无夏令时。
 | 工作流 | 触发 | 作用 |
 | --- | --- | --- |
 | `ci.yml` | `push` 到 `main`、`pull_request`、`workflow_dispatch` | 与发布相同的检查，不发布 |
-| `sync-upstream.yml` | `17 4 * * *`（每天 04:17 UTC，12:17 台北）和 `workflow_dispatch` | 快进 `upstream`，合并进 `main`，或开 PR/issue。见第 5 节 |
+| `sync-upstream.yml` | `17 4 * * *`（每天 04:17 UTC，12:17 台北）和 `workflow_dispatch` | 快进 `upstream`，合并进 `main`，冲突/检查失败时开 PR 或写 Job Summary。见第 5 节 |
 | `publish-frontend.yml` | `23 5 * * *`（每天 05:23 UTC，13:23 台北）和 `workflow_dispatch`。输入 `force`（boolean，默认 false） | 构建上游前端并推本仓库 `gh-pages` |
 | `publish-dist.yml` | `47 */3 * * *`（每 3 小时的第 47 分：UTC 00:47、03:47、06:47、09:47、12:47、15:47、18:47、21:47；台北 08:47、11:47、14:47、17:47、20:47、23:47、02:47、05:47）和 `workflow_dispatch` | 检查并把脚本附到本仓库 Release |
 
 `publish-dist` 比较 `HEAD` 与最新 Release 说明里的 `Built from`。schedule 只在两者不同时构建。还没有 Release，或说明里没有这一行时，schedule 会构建。`workflow_dispatch` 即使 SHA 相同也构建，并用 `gh release upload --clobber` 更新同一 version tag 的资产。比较脚本是 `.github/scripts/dist_source_sha.py`。用 `GITHUB_TOKEN` 推上去的提交不会再触发 `push` 工作流。`sync-upstream` 仅在 `backend/package.json` 变化、重套了 redirect/CORS 补丁，或刷新了 `dist/Surge-Beta.sgmodule` 时，再用 `GITHUB_TOKEN` dispatch 一次 `publish-dist`。其他 main 提交等 schedule。
 
-`publish-frontend` 按本仓库 `gh-pages` 的 `frontend-version.txt` 比较 `sha`、`base`（`/Sub-Store-Fork/`）、`api`（`https://sub.store`）和 `patches`。补丁戳来自 `prepare_frontend_pages.py` 的 `PATCH_STAMP`，当前是 `subpath-routes-1-surge-session-1-repo-pages-1`。后端合并不会让前端补丁上线。`force=true` 时即使已部署也重建。`gh-pages` 还不存在时会创建该分支，不是 force-push，也不动 `main`。
+`publish-frontend` 按本仓库 `gh-pages` 的 `frontend-version.txt` 比较 `sha`、`base`（`/Sub-Store-Fork/`）、`api`（`https://sub.store`）和 `patches`。补丁戳来自 `prepare_frontend_pages.py` 的 `PATCH_STAMP`，当前是 `subpath-routes-1-surge-session-2-repo-pages-1`。后端合并不会让前端补丁上线。`force=true` 时即使已部署也重建。`gh-pages` 还不存在时会创建该分支，不是 force-push，也不动 `main`。
 
 `ci.yml` 就是 PR 检查。它调用 `.github/scripts/run_fork_publish_checks.sh`，不发布。检查顺序：
 
@@ -237,9 +237,9 @@ GitHub cron 是 UTC。台北时间是 UTC+8，无夏令时。
 3. 无冲突时跑 `apply-fork-frontend.mjs`。它只重套两处锚点：`/` 的 302，以及 CORS 默认 origin 里的 `https://ahuai6.github.io`。锚点仍在时它是幂等的。然后 `apply-fork-runtime.mjs --check`。后者只检查标记还在，不会从改写过的上游代码里重建优化。上游模块有变化时，把渲染结果提交到 `dist/Surge-Beta.sgmodule`。
 4. 无冲突、标记还在、并且 `run_fork_publish_checks.sh` 通过时，才推 `main`。
 5. 有冲突文件时，把上游 tip 推到 `sync/upstream` 并开 PR，标题是 `sync: resolve upstream merge conflicts`。该分支的 head 是未改过的上游提交。冲突路径用 `git ls-files -u`。
-6. merge 在写出任何冲突之前失败时开 issue，不开一份冲突列表为空的 PR。
-7. 检查失败时，把合并结果推到 `sync/tests-failed` 并开 PR。不是快进则不强推，改开 issue。
-8. 补丁锚点对不上则开 issue，不推 `main`。
+6. merge 在写出任何冲突之前失败时写入 Job Summary 并以错误退出，不开一份冲突列表为空的 PR（仓库保持关闭 Issues）。
+7. 检查失败时，把合并结果推到 `sync/tests-failed` 并开 PR。不是快进则不强推，把详细日志写入 Job Summary 并以错误退出。
+8. 补丁锚点对不上则写入 Job Summary 并以错误退出，不推 `main`。
 
 常见冲突文件：
 
@@ -348,7 +348,7 @@ cmp /tmp/Surge-Beta.sgmodule dist/Surge-Beta.sgmodule
 - 设置接口写不进 TTL 0 的问题已修复。`resourceCacheTtl`、`headersCacheTtl`、`scriptCacheTtl` 保存 `0` 或 `"0"` 后会关闭对应缓存；空值恢复缺省。规则在第 2 节。
 - PR #12 已关闭、未合并。不要重新打开并合并它的上游 head。`sync/upstream` 分支保留，以后的同步可能再次使用它。
 - squash 会让 Release 说明里的 `Upstream tree`（`git merge-base`）停在更老的共同祖先。以最新 Release 说明为准，不要把文档里的旧 SHA 当成现状。
-- Pages 源是 `gh-pages` 的 `/`。补丁戳是 `subpath-routes-1-surge-session-1-repo-pages-1`，base 是 `/Sub-Store-Fork/`，api 是 `https://sub.store`。构建后的首页应含 `<meta name="sub-store-fork" content="api-cap-2 skip-restored-preview" />`。`docs/performance-plan-audit.md` 里“补丁尚未部署”的句子已经过时。`publish-frontend` 在 `gh-pages` 还不存在时会创建该分支，不是 force-push。
+- Pages 源是 `gh-pages` 的 `/`。补丁戳是 `subpath-routes-1-surge-session-2-repo-pages-1`，base 是 `/Sub-Store-Fork/`，api 是 `https://sub.store`。构建后的首页应含 `<meta name="sub-store-fork" content="api-cap-2 skip-restored-preview" />`。`docs/performance-plan-audit.md` 里“补丁尚未部署”的句子已经过时。`publish-frontend` 在 `gh-pages` 还不存在时会创建该分支，不是 force-push。
 - 前端默认 API 超时在上游是 50000 毫秒，可被 `localStorage.apiRequestTimeout` 覆盖。浏览器超时不会停掉已经在跑的 Surge 脚本。`time_budget` 要留在这个超时之内，或让用户把前端超时调大。
 - `dedup_target` 按 server、port、类型合并，凭据不同也可能共享。它不是出口 IP 的证明。
 - 分片解决单值约 4 MB 的 iOS 限制，不保证设备总空间够用。

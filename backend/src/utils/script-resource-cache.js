@@ -42,13 +42,14 @@ class ResourceCache {
 
     _cleanup(prefix, ttl) {
         this._ensureLoaded();
+        if (!(getTTL() > 0)) return;
         const resolvedTTL = normalizeTTL(ttl) ?? 0;
         let clear = false;
         const now = Date.now();
         Object.entries(this._resourceCache).forEach((entry) => {
             const [id, cached] = entry;
-            const shouldDelete =
-                !cached?.time || cached.time <= now + resolvedTTL;
+            const expiry = effectiveExpiry(cached);
+            const shouldDelete = !expiry || expiry <= now + resolvedTTL;
             if (shouldDelete && (prefix ? id.startsWith(prefix) : true)) {
                 delete this._resourceCache[id];
                 clear = true;
@@ -84,9 +85,10 @@ class ResourceCache {
     }
 
     _persist() {
+        const now = Date.now();
         for (const [id, cached] of Object.entries(this._resourceCache)) {
-            if (!cached?.time || cached.time <= Date.now())
-                delete this._resourceCache[id];
+            const expiry = effectiveExpiry(cached);
+            if (!expiry || expiry <= now) delete this._resourceCache[id];
         }
         this.shards.save(this._resourceCache);
     }
@@ -119,14 +121,7 @@ class ResourceCache {
         const cached = this._loaded
             ? this._resourceCache[id]
             : this.shards.readEntry(id);
-        const time =
-            cached &&
-            Math.min(
-                cached.time,
-                cached.created != null
-                    ? cached.created + getTTL()
-                    : cached.time,
-            );
+        const time = effectiveExpiry(cached);
         if (time && Date.now() < time) {
             return time;
         }
@@ -139,14 +134,7 @@ class ResourceCache {
         const cached = this._loaded
             ? this._resourceCache[id]
             : this.shards.readEntry(id);
-        const time =
-            cached &&
-            Math.min(
-                cached.time,
-                cached.created != null
-                    ? cached.created + getTTL()
-                    : cached.time,
-            );
+        const time = effectiveExpiry(cached);
         if (time) {
             if (Date.now() + resolvedTTL < time) return cached.data;
             if (remove) {
@@ -161,17 +149,15 @@ class ResourceCache {
     set(id, value, ttl) {
         if (!(getTTL() > 0)) return;
         const resolvedTTL = Math.min(normalizeTTL(ttl) ?? getTTL(), getTTL());
-        if (
-            jsonBytes([id, { time: Date.now() + resolvedTTL, data: value }]) >
-            SHARD_BYTES
-        )
-            return;
-        this._ensureLoaded();
-        this._resourceCache[id] = {
-            time: Date.now() + resolvedTTL,
-            created: Date.now(),
+        const now = Date.now();
+        const entry = {
+            time: now + resolvedTTL,
+            created: now,
             data: value,
         };
+        if (jsonBytes([id, entry]) > SHARD_BYTES) return;
+        this._ensureLoaded();
+        this._resourceCache[id] = entry;
         this._schedule();
     }
 }
@@ -189,6 +175,13 @@ function getTTL() {
         'scriptCacheTtl',
         DEFAULT_SCRIPT_CACHE_TTL,
     );
+}
+
+function effectiveExpiry(cached) {
+    if (!cached?.time) return null;
+    return cached.created != null
+        ? Math.min(cached.time, cached.created + getTTL())
+        : cached.time;
 }
 
 const cache = new ResourceCache();

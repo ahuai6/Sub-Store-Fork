@@ -65,4 +65,21 @@ describe('YAML helper without redundant copies', function () {
         expect(out).to.include('*a');
         expect(load(out).self.name).to.equal('n');
     });
+
+    it('does not emit anchors for large unique configs with minor shared fields', function () {
+        this.timeout(10000);
+        const sharedAlpn = ['h2', 'http/1.1'];
+        // > 65,536 total objects/arrays across unique proxies, but only tiny sharing
+        const proxies = [];
+        for (let i = 0; i < 14000; i += 1) {
+            proxies.push({
+                name: `p-${i}`,
+                opts: { a: { k: i }, b: { k: i }, c: { k: i } },
+                ...(i < 20 ? { alpn: sharedAlpn } : {}),
+            });
+        }
+        const out = dump({ proxies }, { lineWidth: -1 });
+        expect(out).to.not.include('&a');
+        expect(out).to.not.include('*a');
+    });
 });

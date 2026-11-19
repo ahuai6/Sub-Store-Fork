@@ -153,6 +153,7 @@ export class CacheShards {
         if (this.write(JSON.stringify(staging), this.key) === false)
             return false;
         this.keys = tracked;
+        this._keySet = new Set(tracked);
         this.sharded = true;
         for (const [id, entry] of pairs) {
             const key = `${this.key}:v1:${hex_md5(id)}`;
@@ -169,6 +170,15 @@ export class CacheShards {
                 this.encoded.delete(key);
             }
         }
+        if (!keys.length) {
+            if (this.write('{}', this.key) === false) return false;
+            this.keys = [];
+            this._keySet = new Set();
+            this._manifestLoaded = true;
+            this.sharded = false;
+            this.legacy = {};
+            return true;
+        }
         const manifest = { cacheShardsVersion: 1, keys };
         if (jsonBytes(manifest) > SHARD_BYTES) return false;
         if (this.write(JSON.stringify(manifest), this.key) === false)
@@ -178,10 +188,6 @@ export class CacheShards {
         this._manifestLoaded = true;
         this.sharded = true;
         this.legacy = {};
-        if (!keys.length) {
-            this.sharded = false;
-            this.write('{}', this.key);
-        }
         return true;
     }
 }

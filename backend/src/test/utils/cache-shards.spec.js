@@ -188,4 +188,75 @@ describe('per-key cache shards', function () {
         expect(killerReads).to.deep.equal(['#lazy']);
         expect(store).to.deep.equal({ '#lazy': '{}' });
     });
+
+    it('persists only once when cold-start get() encounters an expired sharded entry', function () {
+        const { store, io } = storage();
+        let now = 1_700_000_000_000;
+        const writer = new BoundedCache({
+            storeKey: '#expired-once',
+            sharded: true,
+            resolveTtl: () => 1000,
+            ...io,
+        });
+        writer.now = () => now;
+        for (let i = 0; i < 4; i += 1) {
+            expect(writer.set(`k-${i}`, 'x'.repeat(25000))).to.equal(true);
+        }
+        expect(JSON.parse(store['#expired-once']).cacheShardsVersion).to.equal(
+            1,
+        );
+
+        let manifestWrites = 0;
+        const reader = new BoundedCache({
+            storeKey: '#expired-once',
+            sharded: true,
+            resolveTtl: () => 1000,
+            read: io.read,
+            write(value, key) {
+                if (key === '#expired-once') manifestWrites += 1;
+                return io.write(value, key);
+            },
+        });
+        reader.now = () => now + 2000;
+        expect(reader.get('k-0')).to.equal(null);
+        // Single save({}) path: staging + final '{}' (2 manifest writes), not double save (4).
+        expect(manifestWrites).to.equal(2);
+        expect(store).to.deep.equal({ '#expired-once': '{}' });
+    });
+
+    it('keeps _keySet consistent when a shard write fails mid-save', function () {
+        const { store, io } = storage();
+        const shards = new CacheShards('#fail-mid', {
+            read: io.read,
+            write(value, key) {
+                if (key.includes(':v1:')) return false;
+                return io.write(value, key);
+            },
+        });
+        const entries = {
+            big: { time: 99999, data: 'x'.repeat(70000) },
+        };
+        expect(shards.save(entries)).to.equal(false);
+        expect(shards._keySet.size).to.equal(shards.keys.length);
+        for (const key of shards.keys) {
+            expect(shards._keySet.has(key)).to.equal(true);
+        }
+        expect(JSON.parse(store['#fail-mid']).cacheShardsVersion).to.equal(1);
+    });
+
+    it('accounts for shard wrapper bytes when checking BoundedCache budget', function () {
+        const { io } = storage();
+        const cache = new BoundedCache({
+            storeKey: '#tight-budget',
+            sharded: true,
+            budget: 120,
+            resolveTtl: () => 60000,
+            ...io,
+        });
+        const longId = 'k'.repeat(60);
+        const value = 'v'.repeat(40);
+        // entry alone fits under 120 bytes, but [longId, entry] exceeds 120 bytes.
+        expect(cache.set(longId, value)).to.equal(false);
+        expect(cache.get(longId)).to.equal(null);
+    });
 });

@@ -51,42 +51,52 @@ function normalizeParseOptions(options) {
     };
 }
 
-// A unique proxy list stays well under this. A shared diamond does not:
-// aliasDuplicateObjects:false expands it (depth 18 was 29MB / 2.6s here, and
-// deeper graphs run until the script is killed) and a cycle overflows the
-// stack instead of returning. Count expanded objects in linear time and alias
-// only past the limit, so ordinary shared fields stay duplicated.
+// Count duplicated object expansion caused by shared references (not unique
+// tree size). A large unique Clash/Mihomo config stays at 0 extra copies and
+// emits no YAML anchors, while a shared diamond (depth 18 was 29MB / 2.6s here)
+// or a cycle aliases immediately before expanding.
 const YAML_EXPAND_OBJECT_LIMIT = 65536;
 
-function expandedObjectCount(value) {
+function shouldAliasDuplicateObjects(value) {
     const memo = new Map();
+    let extraCopies = 0;
+    let overflow = false;
+
     function size(node, stack) {
+        if (overflow) return YAML_EXPAND_OBJECT_LIMIT + 1;
         if (node === null || typeof node !== 'object') return 0;
-        if (stack.has(node)) return Infinity;
+        if (stack.has(node)) {
+            overflow = true;
+            return Infinity;
+        }
         const cached = memo.get(node);
-        if (cached !== undefined) return cached;
+        if (cached !== undefined) {
+            extraCopies += cached;
+            if (!Number.isFinite(extraCopies) || extraCopies > YAML_EXPAND_OBJECT_LIMIT) {
+                overflow = true;
+            }
+            return cached;
+        }
         stack.add(node);
         let total = 1;
         const children = Array.isArray(node) ? node : Object.values(node);
         for (const child of children) {
             const nested = size(child, stack);
-            if (!Number.isFinite(nested)) {
+            if (overflow || !Number.isFinite(nested)) {
+                overflow = true;
                 stack.delete(node);
                 memo.set(node, Infinity);
                 return Infinity;
             }
-            total += nested;
-            if (total > YAML_EXPAND_OBJECT_LIMIT) {
-                stack.delete(node);
-                memo.set(node, total);
-                return total;
-            }
+            total = Math.min(total + nested, YAML_EXPAND_OBJECT_LIMIT + 1);
         }
         stack.delete(node);
         memo.set(node, total);
         return total;
     }
-    return size(value, new Set());
+
+    size(value, new Set());
+    return overflow;
 }
 
 function normalizeStringifyOptions(options = {}, content) {
@@ -100,15 +110,13 @@ function normalizeStringifyOptions(options = {}, content) {
         ...rest
     } = options || {};
     // noRefs omitted: duplicate shared objects (JSON normalization, no anchors)
-    // until the expanded graph would stall produce/preview. Callers that pass
-    // noRefs still choose explicitly.
+    // until shared-reference expansion would stall produce/preview. Callers
+    // that pass noRefs still choose explicitly.
     const normalized = { ...rest };
     if (typeof noRefs === 'boolean') {
         normalized.aliasDuplicateObjects = !noRefs;
     } else {
-        const expanded = expandedObjectCount(content);
-        normalized.aliasDuplicateObjects =
-            !Number.isFinite(expanded) || expanded > YAML_EXPAND_OBJECT_LIMIT;
+        normalized.aliasDuplicateObjects = shouldAliasDuplicateObjects(content);
     }
 
     if (typeof lineWidth === 'number') {

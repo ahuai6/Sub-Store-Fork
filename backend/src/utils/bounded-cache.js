@@ -33,13 +33,24 @@ function byteLength(value) {
 }
 
 export class BatchFlush {
-    constructor(onFlush, { batchSize = 25, debounceMs = 200 } = {}) {
+    constructor(
+        onFlush,
+        {
+            batchSize = 25,
+            debounceMs = 200,
+            flushIntervalMs = 15000,
+            now = () => Date.now(),
+        } = {},
+    ) {
         this.onFlush = onFlush;
         this.batchSize = batchSize;
         this.debounceMs = debounceMs;
+        this.flushIntervalMs = flushIntervalMs;
+        this.now = now;
         this.dirty = false;
         this.timer = null;
         this.writesSinceFlush = 0;
+        this.lastFlushAt = this.now();
         this.flushing = false;
     }
 
@@ -54,6 +65,7 @@ export class BatchFlush {
         this.clearTimer();
         this.dirty = false;
         this.writesSinceFlush = 0;
+        this.lastFlushAt = this.now();
     }
 
     schedule() {
@@ -64,7 +76,17 @@ export class BatchFlush {
             return;
         }
         // Surge ends the script in $done(); a debounced timer would be cut off.
-        if (SURGE_ONLY) return;
+        // Still checkpoint synchronously when a long-running script accumulates
+        // writes across flushIntervalMs without arming a timer.
+        if (SURGE_ONLY) {
+            if (
+                this.flushIntervalMs > 0 &&
+                this.now() - this.lastFlushAt >= this.flushIntervalMs
+            ) {
+                this.flush();
+            }
+            return;
+        }
         if (this.timer != null) return;
         if (typeof setTimeout !== 'function') {
             this.flush();
@@ -85,6 +107,7 @@ export class BatchFlush {
         try {
             this.clearTimer();
             this.writesSinceFlush = 0;
+            this.lastFlushAt = this.now();
             if (!this.dirty) return;
             this.dirty = false;
             this.onFlush();
@@ -242,8 +265,10 @@ export class BoundedCache {
         // Expired entries are not reusable, even when id still matches.
         if (this.now() >= this._expires(cached)) {
             this._ensureLoaded();
-            delete this._entries[id];
-            this._schedulePersist();
+            if (Object.prototype.hasOwnProperty.call(this._entries, id)) {
+                delete this._entries[id];
+                this._schedulePersist();
+            }
             return null;
         }
         return cached.data;
@@ -268,7 +293,9 @@ export class BoundedCache {
             data: value,
         };
         const dataBytes = byteLength(value);
-        const storedBytes = byteLength(entry);
+        const storedBytes = this.shards
+            ? byteLength([id, entry])
+            : byteLength(entry);
         const entryBudget = this.entryBudget();
         if (
             !Number.isFinite(dataBytes) ||

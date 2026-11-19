@@ -287,4 +287,86 @@ describe('final output cache', function () {
             outputMaterialKey(otherType),
         );
     });
+
+    it('bypasses preview output cache for collections when a child subscription sets noCache', async function () {
+        const registerPreview = require('@/restful/preview').default;
+        const handlers = {};
+        registerPreview({
+            post(route, fn) {
+                handlers[route] = fn;
+            },
+        });
+        let scriptRuns = 0;
+        global.__previewNoCacheCounter = () => {
+            scriptRuns += 1;
+            return scriptRuns;
+        };
+        const subs = [
+            {
+                name: 'child-nocache',
+                source: 'local',
+                content: NODE,
+                noCache: true,
+                process: [
+                    {
+                        type: 'Script Operator',
+                        args: {
+                            mode: 'script',
+                            content:
+                                'function operator(proxies){ const n = global.__previewNoCacheCounter(); return proxies.map(p => ({ ...p, name: `${p.name}-${n}` })); }',
+                        },
+                    },
+                ],
+            },
+        ];
+        $.read = (key) => {
+            if (key === SUBS_KEY) return subs;
+            if (key === SETTINGS_KEY) return { resourceCacheTtl: 3600 };
+            return originalRead(key);
+        };
+        const runPreview = async () => {
+            let payload;
+            const res = {
+                status() {
+                    return this;
+                },
+                set() {
+                    return this;
+                },
+                json(data) {
+                    payload = data;
+                    return this;
+                },
+                send(data) {
+                    payload = data;
+                    return this;
+                },
+            };
+            await handlers['/api/preview/collection'](
+                {
+                    method: 'POST',
+                    path: '/api/preview/collection',
+                    params: {},
+                    query: {},
+                    headers: {},
+                    body: {
+                        name: 'col-with-nocache-child',
+                        subscriptions: ['child-nocache'],
+                        process: [],
+                    },
+                },
+                res,
+            );
+            return payload;
+        };
+        try {
+            const first = await runPreview();
+            const second = await runPreview();
+            expect(scriptRuns).to.equal(2);
+            expect(first.data.processed[0].name).to.equal('HK-1');
+            expect(second.data.processed[0].name).to.equal('HK-2');
+        } finally {
+            delete global.__previewNoCacheCounter;
+        }
+    });
 });

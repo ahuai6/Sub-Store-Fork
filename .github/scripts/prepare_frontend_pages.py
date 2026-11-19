@@ -30,7 +30,7 @@ UPSTREAM_REPO = "sub-store-org/Sub-Store-Front-End"
 # Bump when a source patch changes behavior. publish-frontend compares this
 # with gh-pages frontend-version.txt and rebuilds even if the upstream sha,
 # base, and API URL are unchanged.
-PATCH_STAMP = "subpath-routes-1-surge-session-1-repo-pages-1"
+PATCH_STAMP = "subpath-routes-1-surge-session-2-repo-pages-1"
 
 # subs.ts decides whether to load traffic/expiry by comparing the browser
 # pathname to the router path. Under a project-site base that pathname is

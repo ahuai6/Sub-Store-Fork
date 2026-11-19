@@ -46,4 +46,29 @@ describe('certificate fingerprint helper', function () {
             "can't find PEM header",
         );
     });
+
+    it('hashes the first certificate in a multi-certificate PEM chain', function () {
+        const leaf = Uint8Array.from(Buffer.from('leaf-certificate-der-bytes'));
+        const ca = Uint8Array.from(
+            Buffer.from('intermediate-ca-certificate-der-bytes'),
+        );
+        const chain = `${wrapPem(leaf)}${wrapPem(ca)}`;
+        expect(generateFingerprint(chain)).to.equal(expectedFingerprint(leaf));
+        expect(generateFingerprint(chain)).to.not.equal(
+            expectedFingerprint(ca),
+        );
+    });
+
+    it('throws when PEM footer is missing or mismatched', function () {
+        const truncated =
+            '-----BEGIN CERTIFICATE-----\nQUJD\ntrailing-garbage';
+        const mismatched =
+            '-----BEGIN CERTIFICATE-----\nQUJD\n-----END PUBLIC KEY-----';
+        expect(() => generateFingerprint(truncated)).to.throw(
+            "can't find PEM footer",
+        );
+        expect(() => generateFingerprint(mismatched)).to.throw(
+            "can't find PEM footer",
+        );
+    });
 });

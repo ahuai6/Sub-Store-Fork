@@ -128,8 +128,11 @@ async function operator(proxies = [], targetPlatform, context) {
   }
 
   const CACHE_BATCH = 25
+  const CACHE_FLUSH_INTERVAL_MS = 15000
   const pending = []
   const lastPending = []
+  let lastPendingFlushAt = Date.now()
+  let lastGoodFlushAt = Date.now()
   const started = keepLast ? new Set() : null
 
   try {
@@ -337,7 +340,9 @@ async function operator(proxies = [], targetPlatform, context) {
 
   function cacheId(proxy) {
     const filtered = Object.fromEntries(
-      Object.entries(proxy).filter(([key]) => !/^(collectionName|subName|id|_.*)$/i.test(key))
+      Object.entries(proxy)
+        .filter(([key]) => !/^(collectionName|collectionDisplayName|subName|subDisplayName|id|_.*)$/i.test(key))
+        .sort(([a], [b]) => a.localeCompare(b))
     )
     const mode = twoPhase || targetDedup || method !== 'get'
       ? `:${twoPhase}:${targetDedup}:${reachabilityUrl}:${reachabilityTimeout}:${method}` : ''
@@ -361,16 +366,27 @@ async function operator(proxies = [], targetPlatform, context) {
     }
     if (!cacheEnabled || !id) return
     pending.push([id, data])
-    if (pending.length >= CACHE_BATCH) flushPending()
+    if (
+      pending.length >= CACHE_BATCH ||
+      Date.now() - lastPendingFlushAt >= CACHE_FLUSH_INTERVAL_MS
+    ) {
+      flushPending()
+    }
   }
 
   function rememberLast(id, api) {
     if (!keepLast || !id || api == null) return
     lastPending.push([id, { api, savedAt: Date.now() }])
-    if (lastPending.length >= CACHE_BATCH) flushLast()
+    if (
+      lastPending.length >= CACHE_BATCH ||
+      Date.now() - lastGoodFlushAt >= CACHE_FLUSH_INTERVAL_MS
+    ) {
+      flushLast()
+    }
   }
 
   function flushLast() {
+    lastGoodFlushAt = Date.now()
     if (!lastPending.length) return
     const items = lastPending.splice(0, lastPending.length)
     if (typeof cache.lastGoodSet !== 'function') return
@@ -425,6 +441,7 @@ async function operator(proxies = [], targetPlatform, context) {
   }
 
   function flushPending() {
+    lastPendingFlushAt = Date.now()
     if (pending.length) {
       const items = pending.splice(0, pending.length)
       if (typeof cache.flush === 'function' && typeof cache.set === 'function') {
@@ -502,12 +519,16 @@ async function operator(proxies = [], targetPlatform, context) {
         if (Date.now() >= deadline) throw budgetError()
         const attemptTimeout = Math.max(1, Math.min(TIMEOUT, deadline - Date.now()))
         if (surge_http_api_enabled) {
+          const normalizedMethod = String(METHOD || 'get').toLowerCase()
+          const evalMethod = ['get', 'post', 'put', 'delete', 'head', 'options', 'patch'].includes(normalizedMethod)
+            ? normalizedMethod
+            : 'get'
           const res = await $.http.post({
             url: `${surge_http_api_protocol}://${surge_http_api}/v1/scripting/evaluate`,
             timeout: attemptTimeout,
             headers: { 'x-key': surge_http_api_key, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              script_text: `$httpClient.get(${JSON.stringify({
+              script_text: `$httpClient[${JSON.stringify(evalMethod)}](${JSON.stringify({
                 ...opt,
                 timeout: attemptTimeout / 1000,
               })}, (error, response, data) => {  $done({ error, response, data }) }) `,

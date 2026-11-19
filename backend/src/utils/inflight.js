@@ -43,26 +43,55 @@ function stableStringify(value) {
         .join(',')}}`;
 }
 
+function getHeader(headers, target) {
+    if (!headers || typeof headers !== 'object') return '';
+    if (headers[target] !== undefined) {
+        return headers[target] == null ? '' : String(headers[target]);
+    }
+    const lower = target.toLowerCase();
+    for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === lower) {
+            return headers[key] == null ? '' : String(headers[key]);
+        }
+    }
+    return '';
+}
+
 export function heavyRequestKey(kind, req, { includeUserAgent = false } = {}) {
     const headers = req?.headers || {};
     const parts = {
         kind,
+        method: String(req?.method || 'GET').toUpperCase(),
+        path: req?.path || '',
         params: req?.params || {},
         query: req?.query || {},
         body: req?.body ?? null,
     };
     if (includeUserAgent) {
-        parts.ua = headers['user-agent'] || headers['User-Agent'] || '';
+        parts.ua = getHeader(headers, 'user-agent');
+    }
+    const shareAgeKey = getHeader(headers, 'x-sub-store-share-age-public-key');
+    if (shareAgeKey) {
+        parts.shareAgePublicKey = shareAgeKey;
+    }
+    const ifNoneMatch = getHeader(headers, 'if-none-match');
+    if (ifNoneMatch) {
+        parts.ifNoneMatch = ifNoneMatch;
+    }
+    const ifModifiedSince = getHeader(headers, 'if-modified-since');
+    if (ifModifiedSince) {
+        parts.ifModifiedSince = ifModifiedSince;
     }
     return hex_md5(stableStringify(parts));
 }
 
 function snapshotResponse(box) {
     return {
-        statusCode: box.statusCode,
+        statusCode: box.statusCode ?? 200,
         headers: { ...box.headers },
         removed: [...box.removed],
         body: box.body,
+        encoding: box.encoding,
         method: box.method,
         sent: box.sent,
     };
@@ -83,20 +112,28 @@ function instrument(res, box) {
         end: typeof res.end === 'function' ? res.end.bind(res) : null,
     };
 
+    const resolveStatus = () =>
+        box.statusCode ?? (typeof res.statusCode === 'number' ? res.statusCode : 200);
+
     if (original.status) {
         res.status = (code) => {
-            box.statusCode = code;
+            if (!box.sent) box.statusCode = code;
             original.status(code);
             return res;
         };
     }
     if (original.set) {
         res.set = (key, value) => {
+            if (!box.sent) {
+                if (value === undefined && key && typeof key === 'object') {
+                    Object.assign(box.headers, key);
+                } else {
+                    box.headers[key] = value;
+                }
+            }
             if (value === undefined && key && typeof key === 'object') {
-                Object.assign(box.headers, key);
                 original.set(key);
             } else {
-                box.headers[key] = value;
                 original.set(key, value);
             }
             return res;
@@ -104,39 +141,55 @@ function instrument(res, box) {
     }
     if (original.setHeader) {
         res.setHeader = (key, value) => {
-            box.headers[key] = value;
+            if (!box.sent) box.headers[key] = value;
             return original.setHeader(key, value);
         };
     }
     if (original.removeHeader) {
         res.removeHeader = (key) => {
-            delete box.headers[key];
-            box.removed.push(key);
+            if (!box.sent) {
+                delete box.headers[key];
+                box.removed.push(key);
+            }
             return original.removeHeader(key);
         };
     }
     if (original.send) {
         res.send = (body) => {
-            box.body = body;
-            box.method = 'send';
-            box.sent = true;
+            if (!box.sent) {
+                box.statusCode = resolveStatus();
+                box.body = body;
+                box.method = 'send';
+                box.sent = true;
+            }
             return original.send(body);
         };
     }
     if (original.json) {
         res.json = (data) => {
-            box.body = data;
-            box.method = 'json';
-            box.sent = true;
+            if (!box.sent) {
+                box.statusCode = resolveStatus();
+                box.body = data;
+                box.method = 'json';
+                box.sent = true;
+            }
             return original.json(data);
         };
     }
     if (original.end) {
-        res.end = (body) => {
-            if (body !== undefined) box.body = body;
-            box.method = 'end';
-            box.sent = true;
-            return original.end(body);
+        res.end = (...args) => {
+            if (!box.sent) {
+                box.statusCode = resolveStatus();
+                if (args.length > 0 && typeof args[0] !== 'function') {
+                    box.body = args[0];
+                }
+                if (args.length > 1 && typeof args[1] === 'string') {
+                    box.encoding = args[1];
+                }
+                box.method = 'end';
+                box.sent = true;
+            }
+            return original.end(...args);
         };
     }
     return res;
@@ -158,7 +211,11 @@ export function replayResponse(res, snap) {
         return;
     }
     if (snap.method === 'end' && typeof res.end === 'function') {
-        res.end(snap.body);
+        if (snap.encoding !== undefined) {
+            res.end(snap.body, snap.encoding);
+        } else {
+            res.end(snap.body);
+        }
         return;
     }
     if (typeof res.send === 'function') res.send(snap.body ?? '');
@@ -180,10 +237,11 @@ export function shareResponse(key, res, handler, label = 'request') {
     }
 
     const box = {
-        statusCode: 200,
+        statusCode: undefined,
         headers: {},
         removed: [],
         body: undefined,
+        encoding: undefined,
         method: 'send',
         sent: false,
     };

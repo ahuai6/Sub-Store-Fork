@@ -152,4 +152,129 @@ describe('in-flight request dedup', function () {
         expect(secondRes.statusCode).to.equal(500);
         expect(secondRes.body).to.deep.equal({ status: 'failed' });
     });
+
+    it('separates keys by path, method, share age header, and conditional headers', function () {
+        const base = {
+            method: 'GET',
+            path: '/download/demo',
+            params: { name: 'demo' },
+            query: { target: 'Surge' },
+            headers: { 'user-agent': 'Surge' },
+            body: null,
+        };
+        const share = { ...base, path: '/share/sub/demo' };
+        const head = { ...base, method: 'HEAD' };
+        const ageA = {
+            ...share,
+            headers: {
+                ...share.headers,
+                'X-Sub-Store-Share-Age-Public-Key': 'age1alpha',
+            },
+        };
+        const ageB = {
+            ...share,
+            headers: {
+                ...share.headers,
+                'x-sub-store-share-age-public-key': 'age1beta',
+            },
+        };
+        const conditional = {
+            ...base,
+            headers: { ...base.headers, 'If-None-Match': 'W/"123"' },
+        };
+
+        const keys = [base, share, head, ageA, ageB, conditional].map((req) =>
+            heavyRequestKey('download-sub', req, { includeUserAgent: true }),
+        );
+        expect(new Set(keys).size).to.equal(keys.length);
+    });
+
+    it('replays real Express json responses without corrupting nested send/end calls', async function () {
+        const express = require('express');
+        const http = require('http');
+        const app = express();
+        let runs = 0;
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+
+        app.get('/preview/:name', (req, res) => {
+            const key = heavyRequestKey('express-json', req);
+            shareResponse(key, res, async (targetRes) => {
+                runs += 1;
+                await gate;
+                targetRes
+                    .set('X-Test', 'ok')
+                    .status(201)
+                    .json({ status: 'success', runs });
+            });
+        });
+
+        const server = await new Promise((resolve) => {
+            const srv = app.listen(0, '127.0.0.1', () => resolve(srv));
+        });
+        const fetchOnce = () =>
+            new Promise((resolve, reject) => {
+                http.get(
+                    `http://127.0.0.1:${server.address().port}/preview/demo`,
+                    (res) => {
+                        let body = '';
+                        res.setEncoding('utf8');
+                        res.on('data', (chunk) => {
+                            body += chunk;
+                        });
+                        res.on('end', () =>
+                            resolve({
+                                statusCode: res.statusCode,
+                                headers: res.headers,
+                                body: JSON.parse(body),
+                            }),
+                        );
+                    },
+                ).on('error', reject);
+            });
+
+        try {
+            const p1 = fetchOnce();
+            const p2 = fetchOnce();
+            await new Promise((r) => setTimeout(r, 30));
+            release();
+            const [r1, r2] = await Promise.all([p1, p2]);
+            expect(runs).to.equal(1);
+            for (const r of [r1, r2]) {
+                expect(r.statusCode).to.equal(201);
+                expect(r.headers['x-test']).to.equal('ok');
+                expect(r.headers['content-type']).to.include(
+                    'application/json',
+                );
+                expect(r.body).to.deep.equal({ status: 'success', runs: 1 });
+            }
+        } finally {
+            await new Promise((resolve) => server.close(resolve));
+        }
+    });
+
+    it('preserves end() encoding and callback arguments', async function () {
+        let endArgs;
+        let cbCalled = false;
+        const leaderRes = {
+            statusCode: 202,
+            end(...args) {
+                endArgs = args;
+                const cb = args.find((arg) => typeof arg === 'function');
+                if (cb) cb();
+                return this;
+            },
+        };
+        const snap = await shareResponse('end-args', leaderRes, async (res) => {
+            res.end('hello', 'latin1', () => {
+                cbCalled = true;
+            });
+        });
+        expect(cbCalled).to.equal(true);
+        expect(endArgs.slice(0, 2)).to.deep.equal(['hello', 'latin1']);
+        expect(snap.statusCode).to.equal(202);
+        expect(snap.encoding).to.equal('latin1');
+    });
 });

@@ -32,6 +32,24 @@ const GIST_TOKEN_PATH = 'settings.gistToken';
 const GIST_DOWNLOAD_TOKEN_STRATEGY_PATH = 'settings.gistDownloadTokenStrategy';
 const DEFAULT_FRONTEND_URL = 'https://sub.xream.eu.org';
 
+function restoreStorageContent(content) {
+    const compact = Boolean($.env?.isSurge || $.env?.isLoon || $.env?.isEgern);
+    const serialized = compact
+        ? JSON.stringify(content)
+        : JSON.stringify(content, null, `  `);
+    $.write(serialized, '#sub-store');
+    $.cache = content;
+    if (compact) {
+        $._persistedCache = serialized;
+    }
+    if ($.env.isNode) {
+        /* @non-surge-start */
+        $.persistCache();
+        /* @non-surge-end */
+    }
+    migrate();
+}
+
 export default function register($app) {
     // utils
     $app.get('/api/utils/env', getEnv); // get runtime environment
@@ -83,14 +101,7 @@ export default function register($app) {
                         throw new Error('备份文件校验失败, 无法还原');
                     }
                 }
-                $.write(JSON.stringify(content, null, `  `), '#sub-store');
-                if ($.env.isNode) {
-                    /* @non-surge-start */
-                    $.cache = content;
-                    $.persistCache();
-                    /* @non-surge-end */
-                }
-                migrate();
+                restoreStorageContent(content);
                 success(res);
             } catch (e) {
                 $.error(
@@ -453,15 +464,8 @@ async function gistBackupAction(
                 }
             });
             // restore settings
-            $.write(JSON.stringify(content, null, `  `), '#sub-store');
-            if ($.env.isNode) {
-                /* @non-surge-start */
-                $.cache = content;
-                $.persistCache();
-                /* @non-surge-end */
-            }
             $.info(`perform migration after restoring from gist...`);
-            migrate();
+            restoreStorageContent(content);
             $.info(`migration completed`);
             $.info(`还原备份完成`);
             break;

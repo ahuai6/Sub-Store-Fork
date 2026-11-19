@@ -19,7 +19,7 @@
 | GitHub Release | 构建产物。tag 等于 `backend/package.json` 的 version |
 | `gh-pages` | 从独立前端上游构建的页面，不是后端源码目录 |
 
-CI、发布、前端和上游同步都在本仓库执行，用 `GITHUB_TOKEN`（`contents: write`，同步还要 pull requests、issues、actions）。不使用 `FORK_REPO_TOKEN` 或 `PUBLIC_DIST_TOKEN`。发布走 `publish_public_dist.sh` 和 `publish_frontend_pages.sh`。不上传 Actions artifact，不强推，不删分支。
+CI、发布、前端和上游同步都在本仓库执行，用 `GITHUB_TOKEN`（`contents: write`，同步还要 pull requests、actions；仓库保持关闭 Issues）。不使用 `FORK_REPO_TOKEN` 或 `PUBLIC_DIST_TOKEN`。发布走 `publish_public_dist.sh` 和 `publish_frontend_pages.sh`。不上传 Actions artifact，不强推，不删分支。
 
 仓库已于 2026-11-15 公开。`ci.yml` 在 push 到 `main` 和 pull request 上自动跑。安全设置和提交身份见下文「令牌与仓库安全」。`main.yml` 只监听 `master`，并且会 force-push `release` 分支，不要运行。`star-history.yml` 仍有每日 schedule，文件保持与上游一致，不在这里改。
 
@@ -47,7 +47,7 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
 
 运行的文件是本仓库的 `.github/workflows/sync-upstream.yml`，每天 **04:17 UTC**。
 它在 `git merge` 之前设置 `github-actions[bot]` 的 `user.name` / `user.email`。
-没有身份时，runner 上的 git 会以 `fatal: empty ident name` 立刻失败，并且列不出冲突文件。冲突路径用 `git ls-files -u` 列出。合并在写出任何冲突之前失败时开 issue，不开一份空白冲突 PR。
+没有身份时，runner 上的 git 会以 `fatal: empty ident name` 立刻失败，并且列不出冲突文件。冲突路径用 `git ls-files -u` 列出。合并在写出任何冲突之前失败时写入 Actions Job Summary 并以错误退出，不开一份空白冲突 PR。
 
 1. 取上游 master，将 `upstream` 分支快进；只镜像 origin 尚无的标签，不移动已有标签。
 2. 尝试合并到 main。无冲突时重套 URL/CORS，并检查运行时 fork 标记。上游模块变了就刷新 `dist/Surge-Beta.sgmodule`。
@@ -55,8 +55,8 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
    检查包括 fork 脚本 `--check`、`pnpm test`（含 golden snapshots）、模块
    renderer 的 Python 回归、`pnpm bundle:esbuild` 和 renderer `--check`。
    冲突时把上游 tip 推到 `sync/upstream` 并开 PR。检查失败时把合并结果推到
-   `sync/tests-failed` 并开 PR。两条分支都不是快进时不强推，改为开 issue。
-   缺少 fork 标记会停止并开 issue，不推 main。这并不是“每次更新都先提 PR”。
+   `sync/tests-failed` 并开 PR。两条分支都不是快进时不强推，改为评论已有 PR（若存在）、写入 Actions Job Summary 并以错误退出。
+   缺少 fork 标记会停止，写入 Actions Job Summary 并以错误退出，不推 main。这并不是“每次更新都先提 PR”。
 4. 用 `GITHUB_TOKEN` 推上去的提交不会启动 `push` 工作流。sync 仅在
    `backend/package.json` 变化、重套 fork 补丁，或刷新了已提交模块时，再
    dispatch `publish-dist`。其他 main 提交由 publish-dist 的 schedule 在 SHA
@@ -81,7 +81,6 @@ GitHub 每日上游同步与设备上的订阅/Gist 定时同步是两件事，�
 | --- | --- |
 | Contents: write | 推 `main`、`upstream`、标签、PR 分支、`gh-pages`，以及创建 Release |
 | Pull requests: write | sync 开、评论、关闭 PR |
-| Issues: write | 补丁对不上或无法快进时开 issue |
 | Actions: write | sync dispatch `publish-dist` |
 
 ## 必须保留的 fork 修改

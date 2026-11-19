@@ -429,6 +429,10 @@ async function compareCollection(req, res) {
             }),
         );
 
+        const previewSubs = subnames.map((subName) =>
+            findByName(allSubs, subName),
+        );
+        const childNoCache = previewSubs.some((item) => item && item.noCache);
         const previewMaterial = buildOutputMaterial({
             kind: 'preview-col',
             platform: 'JSON',
@@ -436,9 +440,9 @@ async function compareCollection(req, res) {
             name: collection.name,
             displayName: collection.displayName,
             process: collection.process || [],
-            subs: subnames.map((subName) => findByName(allSubs, subName)),
+            subs: previewSubs,
             ignoreFailedRemoteSub: collectionMode,
-            noCache: collection.noCache || req.query.noCache,
+            noCache: collection.noCache || req.query.noCache || childNoCache,
             noOutputCache: req.query.noOutputCache,
         });
         let previewCacheable = Object.keys(errors).length === 0;
