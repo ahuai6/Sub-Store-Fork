@@ -1,5 +1,7 @@
 # Step 5: Surge checks and cache shards
 
+> **历史归档记录（2026-11-13）**：本文为 Step 5 设计与实施快照，后续已完成 `#sub-store-cached-resource` 分片化、O(1) 增量分片读写以及 `geo.js` 缓存预扫描/`prioritize_stale`/单行汇总日志等演进。当前有效规范请以 `AGENTS.md`、`docs/architecture.md`、`docs/fork-maintenance.md` 及 `docs/maintenance-log.md` 为准。
+
 Started from main `09e6d6a312efd0be5c0de38193fce173475c9efb`, including merged
 PRs #5–#8. `scripts/check/geo.js` is published as a Script Operator at
 https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork/main/scripts/check/geo.js

@@ -1,5 +1,7 @@
 # Performance plan audit — 2026-11-13
 
+> **历史归档记录（2026-11-13）**：本文为早期阶段审计快照，其中部分状态描述（如“前端补丁尚未部署”、早期路由拆分与旧 `PATCH_STAMP`）已过时。当前有效规范请以 `AGENTS.md`、`docs/architecture.md`、`docs/fork-maintenance.md` 及 `docs/maintenance-log.md` 为准。
+
 This audit covers main through PRs #5–#8 and PR #9, including the follow-up
 module-header fix and the owner's request to publish the geo operator.
 
