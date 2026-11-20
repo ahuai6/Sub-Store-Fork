@@ -6,7 +6,7 @@ Install this module in Surge:
 https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork/main/dist/Surge-Beta.sgmodule
 ```
 
-The same file is attached to each GitHub Release:
+Each GitHub Release also attaches the module from that build. Use the Release notes' `Built from` SHA to identify its source revision.
 
 ```
 https://github.com/ahuai6/Sub-Store-Fork/releases/latest/download/Surge-Beta.sgmodule
@@ -28,3 +28,5 @@ https://raw.githubusercontent.com/ahuai6/Sub-Store-Fork/main/scripts/check/geo.j
 Its GPL-3.0 text is `scripts/check/GEO-LICENSE.txt`. Attribution and tracked upstream blob SHA are in `scripts/check/GEO-NOTICE.md`. The backend license is the repository root `LICENSE` (AGPL-3.0). Each Release also attaches `geo.js`, `GEO-LICENSE.txt`, and `GEO-NOTICE.md`.
 
 Frontend: https://ahuai6.github.io/Sub-Store-Fork/
+
+For development, see the [frontend and backend entry points](../docs/architecture.md) and the [local checks and deployment guide](../docs/fork-maintenance.md#local-checks).

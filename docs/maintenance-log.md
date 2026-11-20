@@ -6,11 +6,20 @@
 
 ---
 
+## 2026-11-20 · 交接文档可复跑校对
+
+- 明确 fork 后端源码、上游前端源码和本仓库补丁的入口，补齐从源码验证前端到 Pages 产物的完整流程。
+- 补齐 PowerShell 下的模块渲染、Mocha 验证和后端打包命令。区分 Release、线上 Pages 与 Surge 实机的验收依据。
+- 按现有代码和回归测试校对 Surge 保存路径、冷启动初始化写入、分片清单更新与历史同步恢复的前提。
+- 用 `15bb5759` 的运行时代码复跑手册命令。Windows 后端 1084 项通过，2 项失败均为已知 mihomo 路径用例。Python 回归 18 项通过，模块渲染比对与后端打包通过。前端上游 `59632bfc` 的补丁幂等、`vue-tsc`、构建及 Pages 产物验证通过。
+
+---
+
 ## 2026-11-20 — 文档体系结构化重构
 
 - **背景**：原 `AGENTS.md` 体量超过部分 AI 工具的规则自动注入截断阈值，导致后半部分同步规范与踩坑要点被截断；同时 `dist/README.md` 与 2026-11-13 历史记录存在过时表述。
 - **调整**：
-  - 精炼 `AGENTS.md` 为 ~10 KB 完整交接总纲（确保在工具规则注入中零截断），集中呈现文档导航、三上游定位、硬性约束、审批边界、速查架构、标准命令与高频踩坑。
+  - 将 `AGENTS.md` 从约 46 KB 缩到约 14 KB，降低工具注入时被截断的概率。保留文档导航、三上游定位、硬性约束、审批边界、速查架构和高频注意项。
   - 新增 `docs/architecture.md`（技术架构与子系统深潜规范，含 Mermaid 全景图）与 `docs/maintenance-log.md`（完整时间线维护记录，避免触发 `.gitignore` 中的 `CHANGELOG.md` 规则）。
   - 重构 `docs/fork-maintenance.md` 为纯运维与冲突解决手册；更新 `AGENT.md` 与 `dist/README.md`；为 2026-11-13 两份历史文档添加归档提示横幅。
   - 保持上游原文件 `README.md`、`config/README.md`、`config/Surge-Beta.sgmodule` 原样不动。
@@ -31,7 +40,7 @@
 - **核心改动（P1–P9）**：
   - **P1 前端线上缺陷修复**：`prepare_frontend_pages.py` 补丁 `PreviewPanel.vue` 的 `/preview` 路径补齐 `BASE_URL`（消除子路径 404）；`vite.config.ts` 启用 PWA `registerType: "autoUpdate"`（`check_dist` 强制断言 `sw.js` 含 `skipWaiting` 与 `clientsClaim`）。
   - **P2 前端并发调度与渲染优化**：`forkRequestGuard.ts` 2 槽队列升级为 3 级优先级（写/预览/刷新/下载 > 列表读 > `/api/sub/flow`），`hidden` 状态挂起队列中的流量请求并在 `visibilitychange` 恢复；`FilePreview.vue` 改走 `queuedPreviewGet`；`index.html` 注入 API `preconnect` 与 `.compare-table-row` `content-visibility:auto`。
-  - **P3 O(1) 增量分片与资源缓存分片**：`cache-shards.js` 单例化 `TextEncoder`，新增 `writeEntries`/`deleteEntries` 增量路径（冷启动读写与过期清理不加载无关分片，键集合未变跳过 manifest 重写）；`#sub-store-cached-resource` 接入分片。
+  - **P3 分片增量更新与资源缓存分片**：`cache-shards.js` 单例化 `TextEncoder`，新增 `writeEntries`/`deleteEntries` 增量路径。冷启动按键读选定分片，覆写已有键跳过清单重写。`#sub-store-cached-resource` 接入分片。
   - **P4 下载/输出缓存消除重复解析**：`download.js` + `sync.js` / `preview.js` 增加 `deferPreprocess`（缓存命中零解析）与 `returnParsed`（冷拉只解析一次）；`output-cache.js` 扩展 `OMITTED_SETTINGS` 并对 >256 字符文本做 MD5 摘要。
   - **P5 零源码侵入打包瘦身**：`bundle-esbuild.js` 新增 `stripPeggyGrammarPlugin`（剥离打包期无用 Peggy DSL 字符串）与 `dedupeNoblePlugin`（去重 `@noble/curves` 与 `@noble/hashes` 到 2.2.0 单副本，不改 lockfile）及构建断言。
   - **P6 非 Node 路由加固与批量日志**：`vendor/express.js` 修 `HEAD` 拼写与 `next()` 传参、CORS 后容错解析 JSON（非法返 400）、捕获非 `async` Promise 拒绝、大小写无关 header 去重、安全 query 解码；`debug-logs.js` 在 `SURGE_ONLY` 下满 50 条或响应/`$done` 时批量落盘。
@@ -66,15 +75,15 @@
   2. `cache-shards.js` / `bounded-cache.js`：修复写分片中途失败后 `_keySet` 不一致、冷启动过期触发双次落盘、以及预算核算未计入 `[id, entry]` 包装字节的问题。
   3. `preview.js` / `output-cache.js`：修复组合订阅预览未检查子订阅 `noCache`、`preview-file` 缓存键缺失文件元数据字段的问题。
   4. `geo.js`：`surge_http_api` 请求正确转义并传递配置 HTTP `method`；小批量待刷缓存按 15 秒间隔周期落盘防超时丢失。
-  5. `storage.js` / `batch-flush.js`：Surge 恢复备份时同步内存缓存并触发迁移；Surge 批量刷新改为同步时间检查点（不挂 timer）。
+  5. `restful/miscs.js` 的备份恢复在 Surge 同步内存缓存并触发迁移。`utils/bounded-cache.js` 的 `BatchFlush` 在 Surge 采用同步时间检查点，避开退出时取消定时器的问题。
   6. `sync-upstream.yml`：彻底移除对已关闭 GitHub Issues 的依赖（`gh issue` / `issues: write`），改为输出至 Actions Job Summary 与 PR 评论，并新增 `test_sync_upstream_workflow.py` 守护。
 
 ---
 
 ## 2026-11-16 至 2026-11-19 — 上游 2.44.15–2.44.16 同步与 Surge 保存性能修复
 
-- **`12543105`（PR #22，`647a433b`、`dba79bdc`）**：修复 Surge 保存订阅卡死与反复重写主 store 问题（紧凑存储、未变跳过、防止 YAML 图遍历卡顿），新增 `surge-subscription-save.spec.js` 端到端 Surge VM 回归。
-- **`28909bf0`**：移除重型依赖 `jsrsasign`（`rs.js` 轻量化），为分片缓存实现冷启动单键懒加载（`readEntry` / `_ensureLoaded`），优化 Surge 冷启动。
+- **`12543105`（[PR #22](https://github.com/ahuai6/Sub-Store-Fork/pull/22)，`647a433b`、`dba79bdc`）**：实际 Simple bundle 在 Surge VM 中完成订阅 PATCH 并返回 200。键齐全的夹具在内容变化时写一次主文档，原样再次提交写零次。旧数据缺键仍会触发初始化写入。独立复现了预览和产出中 YAML 共享图展开造成的卡顿，并加上别名回退和回归测试。真机加载卡顿的原因需按具体请求定位。
+- **`28909bf0`**：`rs.js` 改用轻量证书指纹实现，运行时不再导入 `jsrsasign`。上游依赖声明保留。分片缓存改用冷启动单键懒加载（`readEntry` / `_ensureLoaded`），Surge 主文档持久化使用紧凑 JSON。
 - **`bed73b89`**：支持 fork 脚本处理 CRLF 行尾，增强 Windows 本地测试兼容性。
 - **`15071233`**：`CheckResultCache` 批量写入、删除置空键、加固 `geo`/`preview` 缓存边界。
 - **`b1d5827f`（merge commit）**：合入上游 `2.44.15–2.44.16`（`7f2de2f3..2a173b88`：SCP 分享功能、Surge/Surfboard 非法节点名处理）。
