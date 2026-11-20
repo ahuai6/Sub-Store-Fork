@@ -2,7 +2,7 @@
 
 本文是 `AGENTS.md` 的操作手册，覆盖 CI/CD 工作流、仓库安全权限、三条上游基线的同步与冲突处理流程、必须保留的 fork 修改核对表、本地/CI 验证方法及线上验收步骤。
 
-> 全局硬性约束与审批边界见根目录 `AGENTS.md`；系统架构与各子系统实现细节见 `docs/architecture.md`；历史维护记录见 `docs/maintenance-log.md`。两处文档不一致时，以当前代码与 `AGENTS.md` 为准并同步修正过时文档。
+全局约束见 [AGENTS.md](../AGENTS.md)，前后端入口与运行行为见[架构文档](architecture.md)，历史变更与实测记录见[维护日志](maintenance-log.md)。日常开发可直接跳到[本地验证](#local-checks)和[线上验收](#verify-deployment)。
 
 ---
 
@@ -54,7 +54,7 @@ GitHub cron 使用 UTC；台北/北京时间 = UTC+8（无夏令时）。
 `sync-upstream.yml` 依赖 Git 提交图判断 `upstream/master` 是否已是 `main` 的祖先。如果同步 PR 被 squash 或 rebase，文件内容虽已合入，但上游提交不再是 `main` 的父提交，下一次每日同步会**在完全相同的文件上再次冲突**（历史案例见 `docs/maintenance-log.md` PR #13–#16）。
 
 - **铁律**：`sync/*` 或任何包含上游提交的 PR，一律使用 GitHub 的 **Create a merge commit**；**禁止 squash，禁止 rebase**。
-- **补救办法**：若不慎已经 squash，在 `main` 上执行 `git merge -s ours --no-ff <upstream-sha>` 记录祖先关系（树内容不变），再以 **Create a merge commit** 合入 `main`。
+- **补救办法**：先比较目标上游提交范围、原 PR diff 和当前 `origin/main`，确认该范围内的实际改动已完整进入 `main`。确认后，从 `origin/main` 建修复分支，执行 `git merge -s ours --no-ff <upstream-sha>` 记录祖先关系。用 `git diff HEAD^1 HEAD` 确认树内容未变，通过检查后以 **Create a merge commit** 合入 `main`。如果上游改动还有遗漏，用正常合并补齐。`-s ours` 会保留当前文件树，跳过的上游内容也会被后续同步视为已合入。
 - **防误合并**：不要直接合并 head 仍为未改动上游提交的 `sync/upstream` PR，必须先在分支上解完冲突并验证通过。
 
 ### 3.2 高频冲突文件标准解法
@@ -97,41 +97,156 @@ GitHub cron 使用 UTC；台北/北京时间 = UTC+8（无夏令时）。
 | 请求去重 | `inflight.js` 同 realm 共享 preview/download/node-info；不加持久锁，不宣称跨 Surge 会话 |
 | 下载与输出缓存 | `resourceCacheTtl`、noCache/noOutputCache、子订阅 `noCache` 隔离、`preview-file` 元数据键；`deferPreprocess` + `returnParsed` 消除重复解析；`OMITTED_SETTINGS` + `digestLargeString`；命中后仍执行响应转换与 age 加密 |
 | 流量头与检测缓存 | `headersCacheTtl` / `scriptCacheTtl` 各自遵循全局 TTL（0 禁用读写，缩短即生效）；`download.js` 回填 `defaultFlowUserAgent + originalUrl`；`CheckResultCache` 批量写入 |
-| 存储与 O(1) 分片 | `resource`、`script-resource`、`output`、`check`、`last-good` 全部接入 `CacheShards`（64 KiB 阈值、3 MiB UTF-8 上限、旧布局兼容、冷启动单键懒读、`writeEntries`/`deleteEntries` O(1) 增量路径）；`revokeAll()` 清全部分片；Node 按文件写 store，Surge 主文档紧凑存储与恢复同步迁移 |
+| 存储与分片 | `resource`、`script-resource`、`output`、`check`、`last-good` 接入 `CacheShards`（64 KiB 阈值、3 MiB UTF-8 上限、兼容旧布局、单键懒读与分片增量更新）。新增或删除键仍需重写清单。`revokeAll()` 清全部分片。Node 按文件写 store，Surge 主文档紧凑存储，备份恢复时同步迁移 |
 | `geo.js` Operator | 兼容原参数/模板；20 并发上限、同步缓存预扫描、`time_budget`（880 s 安全上限）、`two_phase`、`dedup_target`、`keep_last` / `keep_last_max_age`（全局 TTL 唯一例外，刷新清除、不加标记）、`prioritize_stale` 轮换调度、单行汇总日志；随 `GEO-LICENSE.txt` 与 `GEO-NOTICE.md` 发布，每日非阻塞监测 `xream/scripts` 漂移 |
-| 编译、瘦身与冷启动 | `getFlag` 单次编译；Peggy 预编译（保留语法源）；`surgeOnlyStripPlugin` + `stripPeggyGrammarPlugin` + `dedupeNoblePlugin` 及断言；无 `jsrsasign`（由 `age` / 原生实现替代）；全部生产者/解析器/lodash 源码保留 |
+| 编译、瘦身与冷启动 | `getFlag` 单次编译，Peggy 预编译并保留语法源，保留三个瘦身插件及构建断言。证书指纹走轻量实现，运行时无需导入 `jsrsasign`（上游依赖声明仍在）。保留全部生产者、解析器和 lodash 源码 |
 | 路由、容错与日志 | 纯文件元数据路由（`file-metadata.js`，注册零写入）在 `sub-store-0`（无 `ProxyUtils`）；`/api/file/:name`、`/share/file/:name` 与完整 `file.js` 兼容路由在 `sub-store-1`；`subscriptions.js` 缺失订阅返回 404；`express.js` 非 Node 容错加固（400 非法 JSON、Promise 拒绝捕获、大小写无关 header、安全 query 解析）；`SURGE_ONLY` 批量日志落盘 |
 | 模块渲染与发布 | `config/Surge-Beta.sgmodule` 原样不动；`render_surge_beta_module.py --check` 可逆生成 `dist/Surge-Beta.sgmodule`，三个定时任务默认 `#` 关闭且 prefetch 参数全有默认值；Release 仅上传明确资产列表，无 `upload-artifact` |
 
 ---
 
-## 5. 本地与 CI 检查操作指南
+<a name="local-checks"></a>
 
-### Linux / macOS / CI（标准路径）
+## 5. 本地与 CI 验证
 
-CI 执行 `.github/scripts/run_fork_publish_checks.sh "$PWD"`，顺序如下：
-1. `node .github/scripts/apply-fork-frontend.mjs --check`
-2. `node .github/scripts/apply-fork-runtime.mjs --check`
-3. `cd backend && pnpm i --frozen-lockfile`
-4. 拉取最新 mihomo `version.txt` 并执行 `.github/scripts/sync_mihomo_version.mjs`
-5. `cd backend && pnpm test`（含 `golden-snapshot.spec.js`；当前基线 **1086 passing / 0 failing**）
-6. `python3 -m unittest discover -s .github/scripts -p 'test_*.py'`（当前 **18 passing**）
-7. `cd backend && pnpm bundle:esbuild`（含 `precompile-peggy.js`、`assertNobleDeduplicated()`、`assertSurgeOnlyBundles()`）
-8. `render_surge_beta_module.py --check` 并 `cmp` 校验输出与 `dist/Surge-Beta.sgmodule` 逐字节一致，组装 `public-dist/`（不入库）。
+### Linux / macOS / WSL
 
-### Windows 本地开发注意事项
+在干净的本仓库检出中，从仓库根目录执行。Node 版本见 `.node-version`，pnpm 由 `backend/package.json` 的 `packageManager` 钉住。需要 Corepack、Python 3、Git 和 curl。
 
-- 使用 `corepack pnpm ...` 调用 pinned pnpm。
-- `backend/package.json` 的 `test`/`bench` 使用了 POSIX 环境变量前缀且 `babel-plugin-root-import` 在 Windows 下可能无法解析 `@/`，需在 PowerShell 中先设置 `$env:SUB_STORE_FRONTEND_BACKEND_PATH = '/'`、`$env:NODE_OPTIONS = '--no-experimental-detect-module'`，并通过自定义 Babel `@/` 别名插件运行 Mocha 或 `scripts/bench.js`。
-- `backend/src/test/restful/mihomo-config.spec.js` 中 2 个上游测试因 `os.tmpdir()` 返回 `C:\...`（不以 `/` 开头）而在 Windows 失败，在 Linux `ci.yml` 100% 通过；其余全部测试必须在 Windows 本地 100% 通过，且推送后必须确认 Linux `ci.yml` 0 失败。
-- 本地验证前端补丁：可浅克隆 `sub-store-org/Sub-Store-Front-End` 到临时目录，执行 `python .github/scripts/prepare_frontend_pages.py --patch --frontend-dir <dir>` 两次验证锚点匹配与幂等性。
-- 检查 `geo.js` 上游漂移：`python .github/scripts/check_geo_upstream.py`。
+```bash
+bash .github/scripts/run_fork_publish_checks.sh "$PWD"
+```
+
+这与 Linux CI 使用同一入口，依次检查 fork 锚点和运行时标记、安装锁定依赖、拉取最新 mihomo 版本、跑后端 Mocha 和 golden snapshots、跑 Python 回归、构建产物、渲染并逐字节比对模块。它会修改 `backend/src/utils/download.js` 和 `backend/src/utils/flow.js` 的 mihomo 版本字符串，并重建 `public-dist/`。在临时克隆或专用检出里执行，避免把验证产生的版本更新混进业务提交。
+
+后端性能改动额外在 `backend/` 执行 `corepack pnpm bench`，用 `backend/bench/baseline.json` 对照。该基准使用 Node/V8。`geo.js` 上游漂移可从根目录用 `python3 .github/scripts/check_geo_upstream.py` 检查。
+
+<a name="windows-checks"></a>
+
+### Windows PowerShell
+
+以下第一段从仓库根目录执行。`PYTHONIOENCODING` 也适用于 Mocha 启动的渲染器子进程，避免重定向输出时出现 GBK 编码错误。
+
+```powershell
+$env:PYTHONIOENCODING = 'utf-8'
+node .github/scripts/apply-fork-frontend.mjs --check
+if ($LASTEXITCODE) { throw '重定向或 CORS 补丁检查失败' }
+node .github/scripts/apply-fork-runtime.mjs --check
+if ($LASTEXITCODE) { throw '运行时保护检查失败' }
+python -m unittest discover -s .github/scripts -p 'test_*.py' -v
+if ($LASTEXITCODE) { throw 'Python 回归失败' }
+
+$moduleFile = New-TemporaryFile
+try {
+    python .github/scripts/render_surge_beta_module.py --check --public-repo ahuai6/Sub-Store-Fork --output $moduleFile.FullName
+    if ($LASTEXITCODE) { throw '模块渲染失败' }
+    if ((Get-FileHash $moduleFile.FullName).Hash -ne (Get-FileHash 'dist/Surge-Beta.sgmodule').Hash) {
+        throw '渲染产物与 dist/Surge-Beta.sgmodule 不一致'
+    }
+} finally {
+    Remove-Item -LiteralPath $moduleFile.FullName
+}
+```
+
+从仓库根目录执行以下后端验证。仓库的 `pnpm test` 使用 POSIX 环境变量前缀。以下命令直接调用预编译和 Mocha，用临时加载器处理 Windows 下 `babel-plugin-relative-path-import` 对 `@/` 的转换问题。
+
+```powershell
+Push-Location backend
+$testHook = New-TemporaryFile
+try {
+    $env:PYTHONIOENCODING = 'utf-8'
+    $env:SUB_STORE_FRONTEND_BACKEND_PATH = '/'
+    $env:NODE_OPTIONS = '--no-experimental-detect-module'
+    corepack pnpm install --frozen-lockfile
+    if ($LASTEXITCODE) { throw '后端依赖安装失败' }
+    node scripts/precompile-peggy.js
+    if ($LASTEXITCODE) { throw 'Peggy 预编译失败' }
+    @'
+const path = require('node:path');
+const { createRequire, registerHooks } = require('node:module');
+const backend = process.cwd();
+const fromBackend = createRequire(path.join(backend, 'package.json'));
+registerHooks({
+    resolve(specifier, context, nextResolve) {
+        const resolved = specifier.startsWith('@/')
+            ? path.join(backend, 'src', specifier.slice(2))
+            : specifier;
+        return nextResolve(resolved, context);
+    },
+});
+fromBackend('@babel/register')({
+    babelrc: false,
+    configFile: false,
+    presets: [fromBackend.resolve('@babel/preset-env')],
+});
+'@ | Set-Content -LiteralPath $testHook.FullName -Encoding utf8
+    node node_modules/mocha/bin/mocha.js --require $testHook.FullName --recursive 'src/test/**/*.spec.js'
+    $mochaExitCode = $LASTEXITCODE
+    Write-Output "Mocha exit code: $mochaExitCode"
+
+    corepack pnpm bundle:esbuild
+    if ($LASTEXITCODE) { throw '后端打包失败' }
+} finally {
+    Remove-Item -LiteralPath $testHook.FullName
+    Pop-Location
+}
+```
+
+Windows 下已知两项 mihomo 用例涉及临时文件路径，分别是 `uses remote mihomoConfig source url instead of stale content by default` 和 `merges local and remote mihomoConfig file sources when requested`。它们在 Windows 盘符路径下可能返回 HTTP 500。检查失败清单是否只包含这两项；最终以 Linux CI 全部通过为准。
+
+<a name="frontend-checks"></a>
+
+### 前端补丁与 Pages 产物
+
+从 fork 仓库根目录用 Bash 执行，使用上游前端 `.node-version` 指定的 Node 与上游 `package.json` 指定的 pnpm。Windows 可用 WSL；若用 Git Bash，确认 `python3 --version` 调用的是已安装的 Python 3。以下流程按发布工作流选取上游提交，在新的临时目录验证补丁幂等、类型检查、构建及最终站点。复现已上线版本时，把第一行 `ref` 赋值改为 `ref=$(curl -fsSL https://ahuai6.github.io/Sub-Store-Fork/frontend-version.txt)`。
+
+```bash
+(
+  set -euo pipefail
+  ref=$(bash .github/scripts/resolve_frontend_ref.sh)
+  field() { printf '%s\n' "$ref" | sed -n "s/^$1=//p"; }
+  sha=$(field sha)
+  frontend=$(mktemp -d)
+  git -C "$frontend" init -q
+  git -C "$frontend" fetch --depth 1 https://github.com/sub-store-org/Sub-Store-Front-End.git "$sha"
+  git -C "$frontend" checkout -q --detach FETCH_HEAD
+  expected_node=$(tr -d '\r\n' < "$frontend/.node-version")
+  if [[ $(node -p process.versions.node) != "$expected_node" ]]; then
+    printf '请切换到前端所需的 Node %s\n' "$expected_node" >&2
+    exit 1
+  fi
+
+  prepare=.github/scripts/prepare_frontend_pages.py
+  python3 "$prepare" --patch --frontend-dir "$frontend"
+  git -C "$frontend" add -A
+  python3 "$prepare" --patch --frontend-dir "$frontend"
+  git -C "$frontend" diff --exit-code
+  test -z "$(git -C "$frontend" ls-files --others --exclude-standard)"
+
+  (
+    cd "$frontend"
+    corepack pnpm install --frozen-lockfile
+    VITE_API_URL=https://sub.store NODE_OPTIONS=--max-old-space-size=4096 corepack pnpm build
+  )
+  package=$(cd "$frontend" && node -p "require('./package.json').version")
+  python3 "$prepare" --finalize-site --dist "$frontend/dist" --frontend-dir "$frontend" \
+    --sha "$sha" --track "$(field track)" --release-tag "$(field release_tag)" \
+    --release-sha "$(field release_sha)" --package "$package"
+  printf '前端验证产物 %s\n' "$frontend/dist"
+)
+```
+
+`--finalize-site` 会校验子路径和 Service Worker，添加 `404.html`、`.nojekyll`、许可归属及 `frontend-version.txt`。前端队列或跨域、缓存、路由等跨端改动还应走一遍目标场景。涉及保存或预览时，分别观察页面发起的请求、响应与设备日志。
 
 ---
 
-## 6. 手动发布与线上验收清单
+<a name="verify-deployment"></a>
+
+## 6. 手动发布与线上验收
 
 ### 触发发布
+
+后端与前端有独立排程。需要立即发布对应改动时，手动触发以下工作流。
 
 ```bash
 # 发布后端脚本、模块与 geo.js 到本仓库 GitHub Release
@@ -141,18 +256,18 @@ gh workflow run publish-dist.yml --ref main
 gh workflow run publish-frontend.yml --ref main
 ```
 
-### 线上验收命令
+### 线上验收
+
+1. **后端脚本与 Release**。核对 `Built from` 指向预期的后端、模块或 `geo.js` 源码修订，并检查 12 个资产。相同版本可覆盖发布，tag 不一定指向构建提交。若 `Built from` 落后 `main`，先用 `git diff --name-only` 查看两者差异。仅文档变化时，两边的运行时代码仍可能一致；若包含拟发布变更，查看对应 `publish-dist` 运行及资产。
+2. **Pages 前端**。以线上 `frontend-version.txt` 的上游 `sha`、`base`、`api`、`patches` 对照预期来源与补丁戳。检查线上 `index.html` 与 `sw.js`，并查 `publish-frontend` 和 Pages 部署记录。`gh-pages` 上已有文件时，线上站点仍应独立核对。
+3. **Surge 设备**。根据变更范围，在测试设备上核对模块版本、Core/Simple 对应的路由、默认关闭的定时任务，以及脚本外部资源是否已刷新。打开 Pages，用测试订阅确认首页、保存和预览等受影响流程。记录实机验证和模拟回归各自覆盖的范围。
 
 ```bash
-# 1. 核对 Release 的 Built from SHA 与 12 个资产完整
-gh release view --json tagName,body,assets
-
-# 2. 核对 gh-pages 的 frontend-version.txt（sha、base、api、patches）
-gh api repos/ahuai6/Sub-Store-Fork/contents/frontend-version.txt?ref=gh-pages --jq .content | base64 -d
-
-# 3. 核对 gh-pages 的 sw.js 含 skipWaiting & clientsClaim，index.html 含 fork meta / preconnect / content-visibility
-gh api repos/ahuai6/Sub-Store-Fork/contents/sw.js?ref=gh-pages --jq .content | base64 -d | grep -E "skipWaiting|clientsClaim"
-gh api repos/ahuai6/Sub-Store-Fork/contents/index.html?ref=gh-pages --jq .content | base64 -d | grep -E "sub-store-fork|preconnect|content-visibility"
+gh release view --repo ahuai6/Sub-Store-Fork --json tagName,body,assets
+pages=https://ahuai6.github.io/Sub-Store-Fork
+curl -fsSL "$pages/frontend-version.txt"
+curl -fsSL "$pages/sw.js" | grep -oE 'skipWaiting|clientsClaim' | sort -u
+curl -fsSL "$pages/" | grep -oE 'sub-store-fork|preconnect|content-visibility' | sort -u
 ```
 
 ### Surge iOS 端升级提示

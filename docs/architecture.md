@@ -8,6 +8,8 @@
 
 ## 1. 系统全景与三上游数据流
 
+**前端和后端独立构建、独立发布。** 浏览器界面来自上游 [Sub-Store-Front-End](https://github.com/sub-store-org/Sub-Store-Front-End)。本仓库在构建时注入 Pages 子路径、PWA 和请求队列补丁，发布到 `gh-pages`。在 Surge 模式下，前端请求 `https://sub.store`，由已安装模块接管并路由到后端脚本。Node 入口也可独立提供 API，并支持通过运行配置托管前端静态资源。后端内部的 `sub-store-0` / `sub-store-1` 是 Surge 脚本拆分。
+
 ```mermaid
 flowchart LR
   subgraph Upstreams["三条上游基线"]
@@ -49,7 +51,7 @@ flowchart LR
 | 路径 | 职责与修改边界 |
 | --- | --- |
 | `backend/` | pnpm 包（`packageManager: pnpm@11.0.9`，Node 版本钉在根目录 `.node-version`）。`package.json` 的 `version` 即 Release tag |
-| `backend/src/main.js` | Node 入口，经 `backend/src/restful/index.js` 注册全部路由 |
+| `backend/src/main.js` | Node 与通用后端入口，经 `backend/src/restful/index.js` 注册完整路由 |
 | `backend/src/products/sub-store-0.js` | **Surge 简单脚本**：collections、subscriptions、tokens、modules、纯文件元数据（`file-metadata.js`）、artifacts、settings、sort、archives、miscs、logs、age。**严禁导入 `ProxyUtils`、`restful/sync.js`、`restful/file.js`** |
 | `backend/src/products/sub-store-1.js` | **Surge 核心脚本**：download、完整 `file.js`（`/api/file/:name`、`/share/file/:name` 及旧模块兼容）、preview、sync、node-info。保留全部解析器与生产者 |
 | `backend/src/products/cron-sync-artifacts.js` | 定时同步（Gist）、定时处理（produce）、输出缓存预热（prefetch） |
@@ -62,7 +64,8 @@ flowchart LR
 | `scripts/check/geo.js`、`GEO-NOTICE.md`、`GEO-LICENSE.txt` | 发布的 `geo.js` Script Operator 及其 GPL-3.0 许可证与上游 blob SHA 追踪说明 |
 | `backend/src/test/fixtures/geo.upstream.js` | 上游 `xream/scripts` `geo.js` 快照，供 `geo-optimized.spec.js` 对比默认行为一致性 |
 | `.github/scripts/` | 维护、检查、补丁与发布脚本及对应 Python 单元测试（`test_*.py`） |
-| `.github/scripts/fork-frontend/forkRequestGuard.ts` | 构建前端时注入 `src/utils/forkRequestGuard.ts` 的 Surge 会话保护与优先级队列模块 |
+| `.github/scripts/prepare_frontend_pages.py`、`.github/scripts/fork-frontend/` | 前端补丁入口与请求队列源码。要找页面组件，先定位构建选中的上游前端 SHA，再查看该版本的 `src/` |
+| `.github/scripts/apply-fork-frontend.mjs` | 上游后端同步后校验或补回重定向和 CORS。前端 Vue 源码的补丁由 `prepare_frontend_pages.py` 应用 |
 | `.github/workflows/` | `ci.yml`、`sync-upstream.yml`、`publish-dist.yml`、`publish-frontend.yml`；`main.yml` 和 `star-history.yml` 为上游原文件，不动 |
 
 ---
@@ -79,7 +82,7 @@ Surge `[Script]` 按**声明顺序**匹配 URL `pattern`（注意：**Surge `pat
 - **Simple (`sub-store-0.min.js`)** 匹配规则：`^https?:\/\/sub\.store` 兜底。
   承接 Web UI 首页与日常管理全部轻请求：`/api/subs`、`/api/collections`、`/api/wholeFiles`、`/api/files`、`/api/wholeFile/:name`、`/api/artifacts`、`/api/settings`、`/api/utils/env`、`/api/utils/refresh`、`/api/logs`、`/api/tokens`、`/api/modules`、`/api/archives`、`/api/sort/*`、`/api/age/*`、`/`（302 重定向到 Pages 前端）。
 - **向后兼容**：`sub-store-1.min.js` 依然注册完整 `restful/file.js`，未更新模块的旧 Surge 安装不受任何影响。
-- **冷启动零写入约束**：`sub-store-0.js` 注册的所有路由模块不得在 `register($app)` 阶段对缺失键执行 `$.write(...)`（例如 `file-metadata.js` 仅在 `POST /api/files` 内懒初始化 `FILES_KEY`），确保简单请求不会触发整份 `sub-store` 主文档重写。
+- **轻路由注册约束**：`file-metadata.js` 注册时零写入，`FILES_KEY` 在写请求处理时才保存。新增或迁入的轻路由应保持这个约束。现有的集合、产物、令牌、模块等历史路由仍会补齐缺失的顶层键，详见[保存排障](#surge-save-diagnostics)。
 
 ---
 
@@ -135,13 +138,22 @@ $platform = "Surge"
 
 ---
 
-## 6. 存储、O(1) 缓存分片与全局 TTL
+## 6. 存储、缓存分片与全局 TTL
 
 ### 6.1 主文档持久化（`backend/src/vendor/open-api.js`）
 
 - Node 模式下每个顶层 cache 名为独立 pretty JSON 文件（`SUB_STORE_DATA_BASE_PATH` 或 `.` 下的 `${name}.json`），`#` 开头键写入 `root.json`；仅重写实际变化的文件，内容相同则跳过。
 - Surge 模式下主文档为紧凑 JSON（`JSON.stringify` 无缩进），内容与上次读取相同时跳过 `$persistentStore.write`；不做延迟防抖（脚本在 `$done()` 即销毁）。
-- 恢复备份（`POST /api/storage`）在 Surge 下同步刷新内存 cache 并立即执行 `migrate()`。
+- 恢复备份（`POST /api/storage`）由 `backend/src/restful/miscs.js` 处理，在 Surge 下同步刷新内存 cache 并立即执行 `migrate()`。批量缓存写入由 `backend/src/utils/bounded-cache.js` 的 `BatchFlush` 管理，Surge 使用同步时间检查点和退出前刷盘。
+
+<a name="surge-save-diagnostics"></a>
+
+#### Surge 保存排障
+
+优先记录 `PATCH /api/sub/:name` 自身的状态码、是否回到 `$done()`、主文档写入次数，以及随后 `GET /api/sub/:name` 的结果。再查看同一时间的 `/api/preview/*` 或 `/download/*` 是否占用前端队列。页面上的加载状态可能横跨多次请求。
+
+- [`surge-subscription-save.spec.js`](../backend/src/test/vendor/surge-subscription-save.spec.js) 用实际 Simple bundle 和模拟的 Surge 宿主运行。60 条订阅的夹具在顶层键齐全时，改动后写一次紧凑主文档并返回 200，不读写脚本缓存分片。用已保存内容再次提交时主文档写零次。缺 `collections`、`artifacts`、`tokens`、`modules` 和 `archives` 的夹具会写六次（五次初始化加一次保存）。
+- [PR #22](https://github.com/ahuai6/Sub-Store-Fork/pull/22) 在预览和产出的 YAML 路径复现了共享对象反复展开的问题。当前 YAML 回归约束见 [`yaml.spec.js`](../backend/src/test/utils/yaml.spec.js)。这组证据覆盖了模拟宿主里的保存和 YAML 场景，真机上出现的卡顿仍需结合请求顺序和设备日志定位。
 
 ### 6.2 全局 TTL 规则（`backend/src/utils/bounded-cache.js`）
 
@@ -163,15 +175,15 @@ $platform = "Surge"
 - 正数保持原类型；本次 patch 未携带的键保持原值。
 - `defaultTimeout`、`githubApiTimeout`、`artifactSyncBatchSize`、`cacheThreshold` 仍保持非正数/非数字即删键。
 
-### 6.3 缓存分片布局与 O(1) 增量路径（`backend/src/utils/cache-shards.js`）
+### 6.3 缓存分片布局与增量路径（`backend/src/utils/cache-shards.js`）
 
 六个缓存存储键中，除体量极小的 `#sub-store-cached-headers-resource` 外，其余五个（`#sub-store-cached-resource`、`#sub-store-cached-script-resource`、`#sub-store-cached-output`、`#sub-store-cached-check`、`#sub-store-cached-last-good`）全部接入 `CacheShards`：
 
 - **阈值与格式**：整份映射序列化 `<= 64 KiB` 保持旧单值 JSON 对象布局；超过 `64 KiB` 迁至 `cacheShardsVersion: 1` manifest，每条记录独立存于 `` `${storeKey}:v1:${md5(id)}` ``。
 - **单值上限**：`SHARD_BYTES = 3 MiB`（复用单例 `TextEncoder` 计算 UTF-8 字节，含外层 `[id, entry]` 包装）；超限单条直接跳过不拆块，规避 iOS 约 4 MB 单值限制。
-- **冷启动懒读与 O(1) 增量写/删**：
+- **冷启动懒读与增量写删**：
   - `readEntry(id)`：冷启动只读 manifest + 目标单个分片，不加载其余分片。
-  - `writeEntries(map)` / `deleteEntries(ids)`：已分片状态下新增/修改/过期删除仅读写受影响的单个分片；覆写已有键时键集合未变，**0 次 manifest 重写**；新增键采用 manifest-first 顺序防孤儿分片；旧布局或异常时自动回退全量 `save()`。
+  - `writeEntries(map)` / `deleteEntries(ids)`：已分片状态下只读写受影响的分片。覆写已有键时键集合未变，**0 次 manifest 重写**。新增或删除键时仍要处理并重写清单，新增采用 manifest-first 顺序防孤儿分片。旧布局或异常时自动回退全量 `save()`。
 - **一键清理**：`/api/utils/refresh` 调用全部缓存的 `revokeAll()`，按 manifest 清除所有已登记分片并将主键置 `{}`；`scriptResourceCache.revokeAll()` 联动清理 `checkResultCache` 与 `lastGoodCache`。
 
 ---
@@ -196,7 +208,7 @@ $platform = "Surge"
 
 本仓库不 vendoring 前端代码。`publish-frontend.yml` 每日构建上游 `sub-store-org/Sub-Store-Front-End` 时调用 `.github/scripts/prepare_frontend_pages.py --patch`（锚点缺失立即失败，绝不静默跳过）：
 
-- **当前补丁戳**：`PATCH_STAMP = "subpath-routes-2-pwa-autoupdate-1-surge-session-3-repo-pages-1"`
+- **补丁戳**：本地用 `python3 .github/scripts/prepare_frontend_pages.py --print-patch-stamp` 查询。线上值见 [`frontend-version.txt`](https://ahuai6.github.io/Sub-Store-Fork/frontend-version.txt)。
 - **构建配置与子路径修复**：
   - Vite `base` / `VITE_PUBLIC_PATH` = `/Sub-Store-Fork/`（拒绝 `/`），`VITE_API_URL = https://sub.store`。
   - `createWebHistory(import.meta.env.BASE_URL)`；`index.html` 与 `public/manifests.json` 根路径重写；复制 `404.html` 与 `.nojekyll` 支撑 SPA 路由。
